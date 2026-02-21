@@ -435,24 +435,38 @@ fi
 
 For gemini CLI (always use `--model gemini-3-pro-preview`):
 ```bash
-TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
-REVIEW_RESULT=$(echo "$TASK_JSON" | jq -r '{title, description, plan}' | gemini --sandbox --model gemini-3-pro-preview <<'REVIEW_EOF'
-Review this implementation plan. Evaluate:
-1. Is the plan complete and addresses all requirements?
-2. Are there missing edge cases?
-3. Is the approach sound?
-
-Respond with a JSON object:
-{"status": "approved" or "changes_requested", "comment": "your review in markdown"}
-REVIEW_EOF
-)
+curl -s http://localhost:5173/api/task/$ID | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+with open('/tmp/kanban_plan_review.md', 'w') as f:
+    f.write('# ' + d.get('title','') + '\n\n')
+    f.write('## Description\n' + d.get('description','') + '\n\n')
+    f.write('## Plan\n' + d.get('plan','') + '\n\n')
+    f.write('## Review Instructions\n')
+    f.write('Review this implementation plan. Evaluate:\n')
+    f.write('1. Is the plan complete and addresses all requirements?\n')
+    f.write('2. Are there missing edge cases?\n')
+    f.write('3. Is the approach sound?\n\n')
+    f.write('Respond with a JSON object:\n')
+    f.write('{\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}\n')
+"
+REVIEW_RESULT=$(gemini --sandbox --model gemini-3-pro-preview < /tmp/kanban_plan_review.md)
+rm -f /tmp/kanban_plan_review.md
 ```
 
 For copilot CLI fallback (always use `--model claude-opus-4.6`):
 ```bash
-TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
-REVIEW_INPUT=$(echo "$TASK_JSON" | jq -r '{title, description, plan}')
-REVIEW_RESULT=$(copilot -p "Review this implementation plan: $REVIEW_INPUT. Evaluate: 1) Is the plan complete and addresses all requirements? 2) Are there missing edge cases? 3) Is the approach sound? Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-opus-4.6 2>&1)
+curl -s http://localhost:5173/api/task/$ID | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+with open('/tmp/kanban_plan_review.md', 'w') as f:
+    f.write('# ' + d.get('title','') + '\n\n')
+    f.write('## Description\n' + d.get('description','') + '\n\n')
+    f.write('## Plan\n' + d.get('plan','') + '\n\n')
+"
+REVIEW_INPUT=$(cat /tmp/kanban_plan_review.md)
+rm -f /tmp/kanban_plan_review.md
+REVIEW_RESULT=$(copilot -p "Review this implementation plan:\n$REVIEW_INPUT\nEvaluate: 1) Is the plan complete and addresses all requirements? 2) Are there missing edge cases? 3) Is the approach sound? Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-opus-4.6 2>&1)
 ```
 
 For sonnet fallback (Task tool):
@@ -460,11 +474,24 @@ For sonnet fallback (Task tool):
 Use Task tool: model="sonnet", subagent_type="general-purpose"
 ```
 
-Record result:
+Record result and agent_log:
 ```bash
+# 1. Record review result
 curl -s -X POST http://localhost:5173/api/task/$ID/plan-review \
   -H 'Content-Type: application/json' \
   -d "{\"reviewer\": \"$REVIEWER\", \"status\": \"$REVIEW_STATUS\", \"comment\": \"$REVIEW_COMMENT\"}"
+
+# 2. Append to agent_log (orchestrator must do this for review steps)
+CURRENT_LOG=$(curl -s http://localhost:5173/api/task/$ID | python3 -c "import sys,json; print(json.load(sys.stdin).get('agent_log') or '[]')")
+NEW_LOG=$(python3 -c "
+import json, datetime
+log = json.loads('''$CURRENT_LOG''')
+log.append({'agent': 'review-agent', 'model': '$REVIEWER', 'message': 'Plan review completed: $REVIEW_STATUS', 'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'})
+print(json.dumps(log))
+")
+curl -s -X PATCH http://localhost:5173/api/task/$ID \
+  -H 'Content-Type: application/json' \
+  -d "{\"agent_log\": $(echo "$NEW_LOG" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))")}"
 ```
 
 Default mode: After review, ask user with AskUserQuestion whether to accept/reject.
@@ -527,6 +554,7 @@ curl -s -X PATCH http://localhost:5173/api/task/<ID> \
   -H 'Content-Type: application/json' \
   -d '{"implementation_notes": "<UPDATED_NOTES>", "current_agent": "tdd-tester"}'
 
+Also append to agent_log (read current log, add entry with agent="tdd-tester", model="sonnet", then PATCH).
 Do NOT change the status.
 ```
 
@@ -543,33 +571,62 @@ Same reviewer detection as plan_review (gemini → copilot → sonnet).
 
 For gemini CLI (always use `--model gemini-3-pro-preview`):
 ```bash
-TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
-REVIEW_RESULT=$(echo "$TASK_JSON" | jq -r '{title, description, plan, implementation_notes}' | gemini --sandbox --model gemini-3-pro-preview <<'REVIEW_EOF'
-Review this code implementation. Evaluate:
-1. Code quality: readability, duplication, naming
-2. Error handling: proper try-catch, error messages
-3. Type safety: TypeScript types, minimize any usage
-4. Security: SQL injection, XSS, input validation
-5. Performance: unnecessary queries, memory usage
-
-Respond with a JSON object:
-{"status": "approved" or "changes_requested", "comment": "your review in markdown"}
-REVIEW_EOF
-)
+curl -s http://localhost:5173/api/task/$ID | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+with open('/tmp/kanban_impl_review.md', 'w') as f:
+    f.write('# ' + d.get('title','') + '\n\n')
+    f.write('## Description\n' + d.get('description','') + '\n\n')
+    f.write('## Plan\n' + d.get('plan','') + '\n\n')
+    f.write('## Implementation Notes\n' + d.get('implementation_notes','') + '\n\n')
+    f.write('## Review Instructions\n')
+    f.write('Review this code implementation. Evaluate:\n')
+    f.write('1. Code quality: readability, duplication, naming\n')
+    f.write('2. Error handling: proper try-catch, error messages\n')
+    f.write('3. Type safety: TypeScript types, minimize any usage\n')
+    f.write('4. Security: SQL injection, XSS, input validation\n')
+    f.write('5. Performance: unnecessary queries, memory usage\n\n')
+    f.write('Respond with a JSON object:\n')
+    f.write('{\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}\n')
+"
+REVIEW_RESULT=$(gemini --sandbox --model gemini-3-pro-preview < /tmp/kanban_impl_review.md)
+rm -f /tmp/kanban_impl_review.md
 ```
 
 For copilot CLI (always use `--model claude-opus-4.6`):
 ```bash
-TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
-REVIEW_INPUT=$(echo "$TASK_JSON" | jq -r '{title, description, plan, implementation_notes}')
-REVIEW_RESULT=$(copilot -p "Review this code implementation: $REVIEW_INPUT. Evaluate: 1) Code quality: readability, duplication, naming 2) Error handling: proper try-catch, error messages 3) Type safety: TypeScript types, minimize any usage 4) Security: SQL injection, XSS, input validation 5) Performance: unnecessary queries, memory usage. Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-opus-4.6 2>&1)
+curl -s http://localhost:5173/api/task/$ID | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+with open('/tmp/kanban_impl_review.md', 'w') as f:
+    f.write('# ' + d.get('title','') + '\n\n')
+    f.write('## Description\n' + d.get('description','') + '\n\n')
+    f.write('## Plan\n' + d.get('plan','') + '\n\n')
+    f.write('## Implementation Notes\n' + d.get('implementation_notes','') + '\n\n')
+"
+REVIEW_INPUT=$(cat /tmp/kanban_impl_review.md)
+rm -f /tmp/kanban_impl_review.md
+REVIEW_RESULT=$(copilot -p "Review this code implementation:\n$REVIEW_INPUT\nEvaluate: 1) Code quality: readability, duplication, naming 2) Error handling: proper try-catch, error messages 3) Type safety: TypeScript types, minimize any usage 4) Security: SQL injection, XSS, input validation 5) Performance: unnecessary queries, memory usage. Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-opus-4.6 2>&1)
 ```
 
-Record result:
+Record result and agent_log:
 ```bash
+# 1. Record review result
 curl -s -X POST http://localhost:5173/api/task/$ID/review \
   -H 'Content-Type: application/json' \
   -d "{\"reviewer\": \"$REVIEWER\", \"status\": \"$REVIEW_STATUS\", \"comment\": \"$REVIEW_COMMENT\"}"
+
+# 2. Append to agent_log (orchestrator must do this for review steps)
+CURRENT_LOG=$(curl -s http://localhost:5173/api/task/$ID | python3 -c "import sys,json; print(json.load(sys.stdin).get('agent_log') or '[]')")
+NEW_LOG=$(python3 -c "
+import json, datetime
+log = json.loads('''$CURRENT_LOG''')
+log.append({'agent': 'code-review-agent', 'model': '$REVIEWER', 'message': 'Code review completed: $REVIEW_STATUS', 'timestamp': datetime.datetime.utcnow().isoformat() + 'Z'})
+print(json.dumps(log))
+")
+curl -s -X PATCH http://localhost:5173/api/task/$ID \
+  -H 'Content-Type: application/json' \
+  -d "{\"agent_log\": $(echo "$NEW_LOG" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))")}"
 ```
 
 Default mode: Ask user with AskUserQuestion whether to accept/reject.
@@ -598,6 +655,8 @@ You are a Test Runner Agent for Kanban task #<ID>.
 curl -s -X POST http://localhost:5173/api/task/<ID>/test-result \
   -H 'Content-Type: application/json' \
   -d '{"tester": "test-runner", "status": "pass" or "fail", "lint": "...", "build": "...", "tests": "...", "comment": "..."}'
+
+Also append to agent_log (read current log, add entry with agent="test-runner", model="sonnet", then PATCH).
 ```
 
 ### Step (Single Step)
