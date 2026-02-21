@@ -119,6 +119,9 @@ function getDb(): Database.Database {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN attachments TEXT`);
   } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN notes TEXT`);
+  } catch { /* column already exists */ }
 
   // Ensure images directory exists
   const imagesDir = path.resolve(path.dirname(DB_PATH), "kanban-images");
@@ -180,6 +183,7 @@ interface Task {
   impl_review_count: number;
   level: number;
   attachments: string | null;
+  notes: string | null;
   created_at: string;
   started_at: string | null;
   planned_at: string | null;
@@ -764,6 +768,75 @@ export function kanbanApiPlugin(): Plugin {
             res.end(
               JSON.stringify({ success: true, newStatus, result: newResult })
             );
+          }
+          return;
+        }
+
+        // POST /api/task/:id/note  (add a user note)
+        if (
+          req.url?.match(/^\/api\/task\/\d+\/note$/) &&
+          req.method === "POST"
+        ) {
+          const id = req.url.split("/")[3];
+          const body = await parseBody(req);
+          const db = getDb();
+          {
+            const task = db
+              .prepare("SELECT notes FROM tasks WHERE id = ?")
+              .get(id) as { notes: string | null } | undefined;
+
+            if (!task) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "Not found" }));
+              return;
+            }
+
+            const notes = task.notes ? JSON.parse(task.notes) : [];
+            const note = {
+              id: Date.now(),
+              text: body.text || "",
+              author: body.author || "user",
+              timestamp: new Date().toISOString(),
+            };
+            notes.push(note);
+
+            db.prepare("UPDATE tasks SET notes = ? WHERE id = ?")
+              .run(JSON.stringify(notes), id);
+
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, note }));
+          }
+          return;
+        }
+
+        // DELETE /api/task/:id/note/:noteId  (delete a note)
+        if (
+          req.url?.match(/^\/api\/task\/\d+\/note\/\d+$/) &&
+          req.method === "DELETE"
+        ) {
+          const parts = req.url.split("/");
+          const id = parts[3];
+          const noteId = parseInt(parts[5]);
+          const db = getDb();
+          {
+            const task = db
+              .prepare("SELECT notes FROM tasks WHERE id = ?")
+              .get(id) as { notes: string | null } | undefined;
+
+            if (!task) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "Not found" }));
+              return;
+            }
+
+            const notes = task.notes ? JSON.parse(task.notes) : [];
+            const filtered = notes.filter((n: any) => n.id !== noteId);
+
+            db.prepare("UPDATE tasks SET notes = ? WHERE id = ?")
+              .run(JSON.stringify(filtered), id);
+
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true }));
           }
           return;
         }

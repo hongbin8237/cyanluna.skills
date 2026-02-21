@@ -84,9 +84,9 @@ Req → Plan → Review Plan → Impl → Review Impl → Test → Done
 |--------|--------|-------|-------|-----------|
 | Req | `todo` | User | - | `description` |
 | Plan | `plan` | Plan Agent | opus (Task) | `plan` |
-| Review Plan | `plan_review` | Review Agent | gemini/codex/sonnet | `plan_review_comments` |
+| Review Plan | `plan_review` | Review Agent | gemini/copilot(opus)/sonnet | `plan_review_comments` |
 | Impl | `impl` | Worker → TDD Tester (sequential) | opus → sonnet | `implementation_notes` |
-| Review Impl | `impl_review` | Code Review Agent | gemini/codex/sonnet | `review_comments` |
+| Review Impl | `impl_review` | Code Review Agent | gemini/copilot(opus)/sonnet | `review_comments` |
 | Test | `test` | Test Runner | sonnet (Task) | `test_results` |
 | Done | `done` | - | - | - |
 
@@ -389,18 +389,18 @@ curl -s -X PATCH http://localhost:5173/api/task/<ID> \
 
 **`plan_review` → Review Agent (external CLI or sonnet)**:
 
-Detect available review CLI:
+Detect available review CLI (priority: gemini → copilot → sonnet):
 ```bash
 if command -v gemini &>/dev/null; then
   REVIEWER="gemini"
-elif command -v codex &>/dev/null; then
-  REVIEWER="codex"
+elif command -v copilot &>/dev/null; then
+  REVIEWER="copilot"
 else
   REVIEWER="sonnet"
 fi
 ```
 
-For external CLI (gemini/codex), use heredoc with quoted delimiter for shell injection prevention:
+For gemini CLI, use heredoc with quoted delimiter for shell injection prevention:
 ```bash
 TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
 REVIEW_RESULT=$(echo "$TASK_JSON" | jq -r '{title, description, plan}' | gemini --sandbox <<'REVIEW_EOF'
@@ -415,7 +415,14 @@ REVIEW_EOF
 )
 ```
 
-For sonnet fallback:
+For copilot CLI fallback (uses `-p` with string argument, NOT heredoc):
+```bash
+TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
+REVIEW_INPUT=$(echo "$TASK_JSON" | jq -r '{title, description, plan}')
+REVIEW_RESULT=$(copilot -p "Review this implementation plan: $REVIEW_INPUT. Evaluate: 1) Is the plan complete and addresses all requirements? 2) Are there missing edge cases? 3) Is the approach sound? Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-sonnet-4.6 2>&1)
+```
+
+For sonnet fallback (Task tool):
 ```
 Use Task tool: model="sonnet", subagent_type="general-purpose"
 ```
@@ -499,9 +506,9 @@ curl -s -X PATCH http://localhost:5173/api/task/$ID \
 
 **`impl_review` → Code Review Agent**:
 
-Same reviewer detection as plan_review. Uses gemini/codex/sonnet.
+Same reviewer detection as plan_review (gemini → copilot → sonnet).
 
-For external CLI:
+For gemini CLI:
 ```bash
 TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
 REVIEW_RESULT=$(echo "$TASK_JSON" | jq -r '{title, description, plan, implementation_notes}' | gemini --sandbox <<'REVIEW_EOF'
@@ -516,6 +523,13 @@ Respond with a JSON object:
 {"status": "approved" or "changes_requested", "comment": "your review in markdown"}
 REVIEW_EOF
 )
+```
+
+For copilot CLI:
+```bash
+TASK_JSON=$(curl -s http://localhost:5173/api/task/$ID)
+REVIEW_INPUT=$(echo "$TASK_JSON" | jq -r '{title, description, plan, implementation_notes}')
+REVIEW_RESULT=$(copilot -p "Review this code implementation: $REVIEW_INPUT. Evaluate: 1) Code quality: readability, duplication, naming 2) Error handling: proper try-catch, error messages 3) Type safety: TypeScript types, minimize any usage 4) Security: SQL injection, XSS, input validation 5) Performance: unnecessary queries, memory usage. Respond ONLY with a JSON object: {\"status\": \"approved\" or \"changes_requested\", \"comment\": \"your review in markdown\"}" --model claude-sonnet-4.6 2>&1)
 ```
 
 Record result:
@@ -574,16 +588,16 @@ else
   echo "| Review Agent | gemini | ❌ |"
 fi
 
-if command -v codex &>/dev/null; then
-  echo "| Review Agent | codex | ✅ (fallback) |"
+if command -v copilot &>/dev/null; then
+  echo "| Review Agent | copilot (claude-sonnet-4.6) | ✅ (fallback #1) |"
 else
-  echo "| Review Agent | codex | ❌ |"
+  echo "| Review Agent | copilot | ❌ |"
 fi
 
 echo "| Plan Agent | opus (Task) | ✅ |"
 echo "| Worker Agent | opus (Task) | ✅ |"
 echo "| TDD Tester | sonnet (Task) | ✅ |"
-echo "| Review Agent | sonnet (Task) | ✅ (fallback) |"
+echo "| Review Agent | sonnet (Task) | ✅ (fallback #2) |"
 echo "| Test Runner | sonnet (Task) | ✅ |"
 ```
 
@@ -629,8 +643,9 @@ echo "$BOARD" | jq '{
 - 2nd failure: keep current status, log error to `agent_log`, notify user
 
 ### External CLI Failure
-- `which gemini` not found → try `codex` → fallback to `sonnet` (Task tool)
-- CLI execution error → log to `agent_log`, retry once, then fallback
+- `which gemini` not found → try `copilot -p --model claude-sonnet-4.6` → fallback to `sonnet` (Task tool)
+- CLI execution error (including rate limit) → log to `agent_log`, try next fallback
+- gemini rate limit → copilot fallback → sonnet fallback
 
 ### Review Rejection Loop (Circuit Breaker)
 - `plan_review_count > 3`: stop loop, ask user for guidance
@@ -787,9 +802,9 @@ curl -s -X POST http://localhost:5173/api/task/$ID/test-result \
 |-------|-------|---------|------------|
 | Requirements | `description` | What needs to be done | User |
 | Plan | `plan` | How to approach it | Plan Agent (opus) |
-| Plan Review | `plan_review_comments` | Plan verification | Review Agent (gemini/codex/sonnet) |
+| Plan Review | `plan_review_comments` | Plan verification | Review Agent (gemini/copilot/sonnet) |
 | Implementation | `implementation_notes` | What was changed + tests | Worker (opus) + TDD Tester (sonnet) |
-| Impl Review | `review_comments` | Code review results | Code Review Agent (gemini/codex/sonnet) |
+| Impl Review | `review_comments` | Code review results | Code Review Agent (gemini/copilot/sonnet) |
 | Test | `test_results` | Lint/build/test results | Test Runner (sonnet) |
 
 ## Web Board Viewer

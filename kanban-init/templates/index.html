@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kanban Board</title>
     <link rel="stylesheet" href="/src/style.css" />
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: {
+        primaryColor: '#334155', primaryBorderColor: '#60a5fa', primaryTextColor: '#f1f5f9',
+        lineColor: '#64748b', secondaryColor: '#1e293b', tertiaryColor: '#0f172a',
+      }});
+      window.__mermaid = mermaid;
+    </script>
   </head>
   <body>
     <header>
@@ -12,12 +20,17 @@
         <h1>Kanban Board</h1>
         <div id="project-filter"></div>
       </div>
+      <div class="header-tabs">
+        <button class="tab-btn active" id="tab-board">Board</button>
+        <button class="tab-btn" id="tab-list">List</button>
+      </div>
       <div class="header-meta">
         <span id="count-summary"></span>
         <button id="refresh-btn" title="Refresh">&#x21bb;</button>
       </div>
     </header>
     <main id="board"></main>
+    <main id="list-view" class="hidden"></main>
     <!-- Modal -->
     <div id="modal-overlay" class="modal-overlay hidden">
       <div class="modal">

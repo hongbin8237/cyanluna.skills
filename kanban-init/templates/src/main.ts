@@ -18,6 +18,7 @@ interface Task {
   impl_review_count: number;
   level: number;
   attachments: string | null;
+  notes: string | null;
   created_at: string;
   started_at: string | null;
   planned_at: string | null;
@@ -57,6 +58,7 @@ const STATUS_BADGES: Record<string, string> = {
 
 let currentProject: string | null = null;
 let isDragging = false;
+let currentView: "board" | "list" = "board";
 
 function priorityClass(priority: string): string {
   if (priority === "high") return "high";
@@ -158,6 +160,12 @@ function renderCard(task: Task): string {
     ? task.description.split("\n")[0].slice(0, 80)
     : "";
 
+  // Notes count
+  const noteCount = parseJsonArray(task.notes).length;
+  const notesBadge = noteCount > 0
+    ? `<span class="badge notes-count" title="${noteCount} note(s)">\u{1F4AC} ${noteCount}</span>`
+    : "";
+
   return `
     <div class="card" draggable="true" data-id="${task.id}" data-status="${task.status}">
       <div class="card-header">
@@ -173,6 +181,7 @@ function renderCard(task: Task): string {
         ${projectBadge}
         ${planReviewBadge}
         ${reviewBadge}
+        ${notesBadge}
         ${dateBadge}
       </div>
       ${tags ? `<div class="card-tags">${tags}</div>` : ""}
@@ -210,6 +219,7 @@ function renderColumn(
 const RE_CODE_BLOCK = /```[\s\S]*?```/g;
 const RE_CODE_OPEN = /```\w*\n?/;
 const RE_CODE_CLOSE = /```$/;
+const RE_MERMAID_OPEN = /^```mermaid\s*\n?/;
 const RE_BOLD = /\*\*(.+?)\*\*/g;
 const RE_INLINE_CODE = /`([^`]+)`/g;
 const RE_CB_PLACEHOLDER = /^\x00CB(\d+)\x00$/;
@@ -218,13 +228,23 @@ const RE_H2 = /^## (.+)$/;
 const RE_H1 = /^# (.+)$/;
 const RE_UL = /^[-*]\s+(.+)$/;
 const RE_OL = /^\d+\.\s+(.+)$/;
+const RE_TABLE_ROW = /^\|(.+)\|$/;
+const RE_TABLE_SEP = /^\|[\s:-]+\|$/;
+
+let mermaidCounter = 0;
 
 function simpleMarkdownToHtml(md: string): string {
-  // Extract code blocks first to protect them
+  // Extract code blocks first to protect them (mermaid gets special treatment)
   const codeBlocks: string[] = [];
   let text = md.replace(RE_CODE_BLOCK, (match) => {
-    const code = match.replace(RE_CODE_OPEN, "").replace(RE_CODE_CLOSE, "");
-    codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    if (RE_MERMAID_OPEN.test(match)) {
+      const diagram = match.replace(RE_MERMAID_OPEN, "").replace(RE_CODE_CLOSE, "").trim();
+      const id = `mermaid-${++mermaidCounter}`;
+      codeBlocks.push(`<pre class="mermaid" id="${id}">${diagram}</pre>`);
+    } else {
+      const code = match.replace(RE_CODE_OPEN, "").replace(RE_CODE_CLOSE, "");
+      codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    }
     return `\x00CB${codeBlocks.length - 1}\x00`;
   });
 
@@ -239,40 +259,64 @@ function simpleMarkdownToHtml(md: string): string {
   let inUl = false;
   let inOl = false;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  function closeLists() {
+    if (inUl) { out.push("</ul>"); inUl = false; }
+    if (inOl) { out.push("</ol>"); inOl = false; }
+  }
+
+  let i = 0;
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
 
     // Code block placeholder
     const cbMatch = trimmed.match(RE_CB_PLACEHOLDER);
     if (cbMatch) {
-      if (inUl) { out.push("</ul>"); inUl = false; }
-      if (inOl) { out.push("</ol>"); inOl = false; }
+      closeLists();
       out.push(codeBlocks[parseInt(cbMatch[1])]);
+      i++; continue;
+    }
+
+    // Markdown table: detect consecutive pipe rows
+    if (RE_TABLE_ROW.test(trimmed)) {
+      closeLists();
+      const tableRows: string[] = [];
+      while (i < lines.length && RE_TABLE_ROW.test(lines[i].trim())) {
+        tableRows.push(lines[i].trim());
+        i++;
+      }
+      if (tableRows.length >= 2) {
+        // Check if row[1] is separator
+        const hasSep = RE_TABLE_SEP.test(tableRows[1]);
+        const headerRow = hasSep ? tableRows[0] : null;
+        const dataStart = hasSep ? 2 : 0;
+
+        let tableHtml = '<table class="md-table">';
+        if (headerRow) {
+          const cells = headerRow.slice(1, -1).split("|").map(c => c.trim());
+          tableHtml += "<thead><tr>" + cells.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
+        }
+        tableHtml += "<tbody>";
+        for (let r = dataStart; r < tableRows.length; r++) {
+          if (RE_TABLE_SEP.test(tableRows[r])) continue;
+          const cells = tableRows[r].slice(1, -1).split("|").map(c => c.trim());
+          tableHtml += "<tr>" + cells.map(c => `<td>${c}</td>`).join("") + "</tr>";
+        }
+        tableHtml += "</tbody></table>";
+        out.push(tableHtml);
+      } else {
+        // Single pipe row, treat as paragraph
+        out.push(`<p>${tableRows[0]}</p>`);
+      }
       continue;
     }
 
     // Headings
     const h3 = trimmed.match(RE_H3);
-    if (h3) {
-      if (inUl) { out.push("</ul>"); inUl = false; }
-      if (inOl) { out.push("</ol>"); inOl = false; }
-      out.push(`<h3>${h3[1]}</h3>`);
-      continue;
-    }
+    if (h3) { closeLists(); out.push(`<h3>${h3[1]}</h3>`); i++; continue; }
     const h2 = trimmed.match(RE_H2);
-    if (h2) {
-      if (inUl) { out.push("</ul>"); inUl = false; }
-      if (inOl) { out.push("</ol>"); inOl = false; }
-      out.push(`<h2>${h2[1]}</h2>`);
-      continue;
-    }
+    if (h2) { closeLists(); out.push(`<h2>${h2[1]}</h2>`); i++; continue; }
     const h1 = trimmed.match(RE_H1);
-    if (h1) {
-      if (inUl) { out.push("</ul>"); inUl = false; }
-      if (inOl) { out.push("</ol>"); inOl = false; }
-      out.push(`<h1>${h1[1]}</h1>`);
-      continue;
-    }
+    if (h1) { closeLists(); out.push(`<h1>${h1[1]}</h1>`); i++; continue; }
 
     // Unordered list
     const ul = trimmed.match(RE_UL);
@@ -280,7 +324,7 @@ function simpleMarkdownToHtml(md: string): string {
       if (inOl) { out.push("</ol>"); inOl = false; }
       if (!inUl) { out.push("<ul>"); inUl = true; }
       out.push(`<li>${ul[1]}</li>`);
-      continue;
+      i++; continue;
     }
 
     // Ordered list
@@ -289,12 +333,11 @@ function simpleMarkdownToHtml(md: string): string {
       if (inUl) { out.push("</ul>"); inUl = false; }
       if (!inOl) { out.push("<ol>"); inOl = true; }
       out.push(`<li>${ol[1]}</li>`);
-      continue;
+      i++; continue;
     }
 
     // Close open lists on non-list lines
-    if (inUl) { out.push("</ul>"); inUl = false; }
-    if (inOl) { out.push("</ol>"); inOl = false; }
+    closeLists();
 
     // Empty line = paragraph break, non-empty = paragraph
     if (trimmed === "") {
@@ -302,11 +345,23 @@ function simpleMarkdownToHtml(md: string): string {
     } else {
       out.push(`<p>${trimmed}</p>`);
     }
+    i++;
   }
-  if (inUl) out.push("</ul>");
-  if (inOl) out.push("</ol>");
+  closeLists();
 
   return out.join("\n");
+}
+
+async function renderMermaidDiagrams(container: HTMLElement) {
+  const mermaid = (window as any).__mermaid;
+  if (!mermaid) return;
+  const elements = container.querySelectorAll("pre.mermaid");
+  if (elements.length === 0) return;
+  try {
+    await mermaid.run({ nodes: elements });
+  } catch (e) {
+    console.warn("Mermaid render failed:", e);
+  }
 }
 
 function renderLifecycleSection(
@@ -572,6 +627,33 @@ async function showTaskDetail(id: number) {
       `;
     }
 
+    // Notes section
+    const notes = parseJsonArray(task.notes);
+    const notesHtml = notes.map((n: any) => `
+      <div class="note-entry">
+        <div class="note-header">
+          <span class="note-author">${n.author || 'user'}</span>
+          <span class="note-time">${n.timestamp?.slice(0, 16).replace('T', ' ') || ''}</span>
+          <button class="note-delete" data-note-id="${n.id}" title="Delete">&times;</button>
+        </div>
+        <div class="note-text">${simpleMarkdownToHtml(n.text || '')}</div>
+      </div>
+    `).join('');
+
+    const notesSection = `
+      <div class="notes-section">
+        <div class="notes-header">
+          <span>Notes</span>
+          <span class="notes-count">${notes.length}</span>
+        </div>
+        <div class="notes-list">${notesHtml}</div>
+        <form class="note-form" id="note-form">
+          <textarea id="note-input" rows="2" placeholder="Add a note... (supports markdown)"></textarea>
+          <button type="submit" class="note-submit">Add Note</button>
+        </form>
+      </div>
+    `;
+
     content.innerHTML = `
       <h1>#${task.id} ${task.title}</h1>
       <div class="modal-meta">${meta}</div>
@@ -586,10 +668,14 @@ async function showTaskDetail(id: number) {
         ${testSection}
         ${agentLogSection}
       </div>
+      ${notesSection}
       <div class="modal-danger-zone">
         <button class="delete-task-btn" id="delete-task-btn">Delete Card</button>
       </div>
     `;
+
+    // Render mermaid diagrams in modal
+    renderMermaidDiagrams(content);
 
     // Level change handler
     const levelSelect = document.getElementById("level-select") as HTMLSelectElement;
@@ -608,7 +694,7 @@ async function showTaskDetail(id: number) {
       if (!confirm(`Delete card #${task.id} "${task.title}"?`)) return;
       await fetch(`/api/task/${id}`, { method: "DELETE" });
       document.getElementById("modal-overlay")!.classList.add("hidden");
-      loadBoard();
+      refreshCurrentView();
     });
 
     // Requirements edit handlers
@@ -679,6 +765,32 @@ async function showTaskDetail(id: number) {
         showTaskDetail(id);
       });
     });
+
+    // Note form submit
+    const noteForm = document.getElementById("note-form") as HTMLFormElement;
+    const noteInput = document.getElementById("note-input") as HTMLTextAreaElement;
+    noteForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = noteInput.value.trim();
+      if (!text) return;
+      noteInput.disabled = true;
+      await fetch(`/api/task/${id}/note`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      showTaskDetail(id);
+    });
+
+    // Note delete buttons
+    content.querySelectorAll(".note-delete").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const noteId = (btn as HTMLElement).dataset.noteId;
+        await fetch(`/api/task/${id}/note/${noteId}`, { method: "DELETE" });
+        showTaskDetail(id);
+      });
+    });
   } catch {
     content.innerHTML = '<div style="color:#ef4444">Failed to load</div>';
   }
@@ -730,6 +842,143 @@ async function loadBoard() {
     board.innerHTML = `
       <div style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;color:#ef4444;font-size:0.9rem;padding:48px">
         Cannot find .claude/kanban.db
+      </div>
+    `;
+  }
+}
+
+async function loadListView() {
+  const listView = document.getElementById("list-view")!;
+  const params = currentProject ? `?project=${encodeURIComponent(currentProject)}` : "";
+
+  try {
+    const res = await fetch(`/api/board${params}`);
+    const data: Board = await res.json();
+
+    renderProjectFilter(data.projects);
+
+    // Flatten all tasks from all columns
+    const allTasks: Task[] = [];
+    for (const col of COLUMNS) {
+      for (const t of data[col.key as keyof Omit<Board, "projects">]) {
+        allTasks.push(t);
+      }
+    }
+
+    // Sort by ID descending (newest first)
+    allTasks.sort((a, b) => b.id - a.id);
+
+    const total = allTasks.length;
+    const doneCount = allTasks.filter(t => t.status === "done").length;
+    document.getElementById("count-summary")!.textContent =
+      `${doneCount}/${total} completed`;
+
+    const statusOptions = COLUMNS.map(c =>
+      `<option value="${c.key}">${c.icon} ${c.label}</option>`
+    ).join("");
+    const levelOptions = [1, 2, 3].map(l =>
+      `<option value="${l}">L${l}</option>`
+    ).join("");
+    const priorityOptions = ["high", "medium", "low"].map(p =>
+      `<option value="${p}">${p[0].toUpperCase() + p.slice(1)}</option>`
+    ).join("");
+
+    const rows = allTasks.map(t => {
+      const pClass = priorityClass(t.priority);
+      const tags = parseTags(t.tags);
+      const tagsHtml = tags.map(tag => `<span class="tag">${tag}</span>`).join("");
+      return `
+        <tr class="status-${t.status}" data-id="${t.id}">
+          <td class="col-id">#${t.id}</td>
+          <td class="col-title">${t.title}</td>
+          <td>
+            <select class="list-status-select" data-id="${t.id}" data-field="status">
+              ${COLUMNS.map(c =>
+                `<option value="${c.key}" ${c.key === t.status ? "selected" : ""}>${c.icon} ${c.label}</option>`
+              ).join("")}
+            </select>
+          </td>
+          <td>
+            <select class="list-level-select" data-id="${t.id}" data-field="level">
+              ${[1, 2, 3].map(l =>
+                `<option value="${l}" ${l === t.level ? "selected" : ""}>L${l}</option>`
+              ).join("")}
+            </select>
+          </td>
+          <td>
+            <select class="list-priority-select ${pClass}" data-id="${t.id}" data-field="priority">
+              ${["high", "medium", "low"].map(p =>
+                `<option value="${p}" ${p === t.priority ? "selected" : ""}>${p[0].toUpperCase() + p.slice(1)}</option>`
+              ).join("")}
+            </select>
+          </td>
+          <td class="list-date">${t.project || ""}</td>
+          <td>${tagsHtml}</td>
+          <td class="list-date">${t.created_at?.slice(0, 10) || ""}</td>
+          <td class="list-date">${t.completed_at?.slice(0, 10) || ""}</td>
+        </tr>
+      `;
+    }).join("");
+
+    listView.innerHTML = `
+      <table class="list-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Level</th>
+            <th>Priority</th>
+            <th>Project</th>
+            <th>Tags</th>
+            <th>Created</th>
+            <th>Completed</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    // Inline edit handlers for selects
+    listView.querySelectorAll("select").forEach((sel) => {
+      sel.addEventListener("change", async (e) => {
+        e.stopPropagation();
+        const el = sel as HTMLSelectElement;
+        const taskId = el.dataset.id;
+        const field = el.dataset.field!;
+        let value: string | number = el.value;
+        if (field === "level") value = parseInt(value);
+
+        const resp = await fetch(`/api/task/${taskId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: value }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          if (err.error) showToast(err.error);
+          loadListView(); // Revert on error
+          return;
+        }
+        loadListView();
+      });
+    });
+
+    // Click title to open detail modal
+    listView.querySelectorAll(".col-title").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const row = (el as HTMLElement).closest("tr")!;
+        const id = parseInt(row.dataset.id!);
+        showTaskDetail(id);
+      });
+    });
+  } catch (err) {
+    console.error("loadListView failed:", err);
+    listView.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;color:#ef4444;font-size:0.9rem;padding:48px">
+        Failed to load task list
       </div>
     `;
   }
@@ -889,8 +1138,39 @@ fetch("/api/info")
   })
   .catch(() => {});
 
+function switchView(view: "board" | "list") {
+  currentView = view;
+  const boardEl = document.getElementById("board")!;
+  const listEl = document.getElementById("list-view")!;
+  const tabBoard = document.getElementById("tab-board")!;
+  const tabList = document.getElementById("tab-list")!;
+
+  if (view === "board") {
+    boardEl.classList.remove("hidden");
+    listEl.classList.add("hidden");
+    tabBoard.classList.add("active");
+    tabList.classList.remove("active");
+    loadBoard();
+  } else {
+    boardEl.classList.add("hidden");
+    listEl.classList.remove("hidden");
+    tabBoard.classList.remove("active");
+    tabList.classList.add("active");
+    loadListView();
+  }
+}
+
+function refreshCurrentView() {
+  if (currentView === "board") loadBoard();
+  else loadListView();
+}
+
 // Init
 loadBoard();
+
+// Tab switching
+document.getElementById("tab-board")!.addEventListener("click", () => switchView("board"));
+document.getElementById("tab-list")!.addEventListener("click", () => switchView("list"));
 
 // Auto-refresh every 10 seconds (pause when modal is open or dragging)
 setInterval(() => {
@@ -898,12 +1178,12 @@ setInterval(() => {
   const detailOpen = !document.getElementById("modal-overlay")!.classList.contains("hidden");
   const addOpen = !document.getElementById("add-card-overlay")!.classList.contains("hidden");
   if (!detailOpen && !addOpen) {
-    loadBoard();
+    refreshCurrentView();
   }
 }, 10000);
 
 // Refresh button
-document.getElementById("refresh-btn")!.addEventListener("click", loadBoard);
+document.getElementById("refresh-btn")!.addEventListener("click", refreshCurrentView);
 
 // Close modal
 document.getElementById("modal-close")!.addEventListener("click", () => {
@@ -1025,5 +1305,5 @@ document.getElementById("add-card-form")!.addEventListener("submit", async (e) =
   (document.getElementById("add-card-form") as HTMLFormElement).reset();
   renderAddAttachmentPreview();
   addCardOverlay.classList.add("hidden");
-  loadBoard();
+  refreshCurrentView();
 });

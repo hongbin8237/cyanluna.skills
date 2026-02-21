@@ -33,6 +33,32 @@ header h1 {
   color: #f8fafc;
 }
 
+.header-tabs {
+  display: flex;
+  gap: 2px;
+  background: #0f172a;
+  border-radius: 6px;
+  padding: 2px;
+}
+.tab-btn {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab-btn:hover {
+  color: #94a3b8;
+}
+.tab-btn.active {
+  background: #334155;
+  color: #f1f5f9;
+}
+
 .header-meta {
   display: flex;
   align-items: center;
@@ -85,6 +111,9 @@ main#board {
   gap: 0;
   height: calc(100vh - 57px);
   overflow-x: auto;
+}
+main#board.hidden {
+  display: none;
 }
 
 .column {
@@ -1149,4 +1178,261 @@ details.phase-agent-log[open] > summary::before {
     border-bottom: 1px solid #1e293b;
     max-height: 50vh;
   }
+}
+
+/* List View */
+#list-view {
+  padding: 16px 24px;
+  height: calc(100vh - 57px);
+  overflow-y: auto;
+}
+#list-view.hidden {
+  display: none;
+}
+.list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.list-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 2px solid #334155;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: #0f172a;
+  z-index: 1;
+}
+.list-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1e293b;
+  color: #cbd5e1;
+  vertical-align: middle;
+}
+.list-table tr:hover td {
+  background: #1e293b;
+}
+.list-table tr.status-done td {
+  opacity: 0.5;
+}
+.list-table tr:hover.status-done td {
+  opacity: 0.8;
+}
+.list-table .col-id {
+  color: #64748b;
+  font-weight: 500;
+  width: 50px;
+}
+.list-table .col-title {
+  font-weight: 600;
+  color: #f1f5f9;
+  cursor: pointer;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-table .col-title:hover {
+  color: #60a5fa;
+}
+.list-status-select,
+.list-level-select,
+.list-priority-select {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.list-status-select:hover,
+.list-level-select:hover,
+.list-priority-select:hover {
+  border-color: #60a5fa;
+}
+.list-status-select:focus,
+.list-level-select:focus,
+.list-priority-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.list-date {
+  font-size: 0.68rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+/* Markdown tables */
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  margin: 10px 0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.md-table th {
+  background: #1e293b;
+  color: #94a3b8;
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid #334155;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.md-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #1e293b;
+  color: #cbd5e1;
+}
+.md-table tr:last-child td {
+  border-bottom: none;
+}
+.md-table tr:hover td {
+  background: #1e293b40;
+}
+
+/* Mermaid diagrams */
+pre.mermaid {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 10px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Notes section */
+.notes-section {
+  margin-top: 20px;
+  border-top: 1px solid #1e293b;
+  padding-top: 16px;
+}
+.notes-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 12px;
+}
+.notes-count {
+  background: #334155;
+  color: #94a3b8;
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.note-entry {
+  background: #1e293b;
+  border-radius: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid #3b82f6;
+}
+.note-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.note-author {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #60a5fa;
+}
+.note-time {
+  font-size: 0.65rem;
+  color: #475569;
+}
+.note-delete {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #475569;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.note-delete:hover {
+  color: #ef4444;
+  background: #1e293b;
+}
+.note-text {
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+.note-text p {
+  margin: 0 0 4px;
+}
+.note-text p:last-child {
+  margin-bottom: 0;
+}
+.note-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.note-form textarea {
+  flex: 1;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 36px;
+}
+.note-form textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.note-form textarea::placeholder {
+  color: #475569;
+}
+.note-submit {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.note-submit:hover {
+  background: #2563eb;
+}
+.badge.notes-count {
+  background: #1e3a5f;
+  color: #60a5fa;
+  font-size: 0.6rem;
 }
