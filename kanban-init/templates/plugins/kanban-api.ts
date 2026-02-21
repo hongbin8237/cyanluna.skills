@@ -10,6 +10,17 @@ const DB_PATH =
   process.env.KANBAN_DB ||
   path.resolve(__dirname, "..", "..", ".claude", "kanban.db");
 
+// Valid status transitions for the 7-column pipeline
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  todo:        ["plan"],
+  plan:        ["plan_review", "todo"],
+  plan_review: ["impl", "plan"],           // approve->impl, reject->plan
+  impl:        ["impl_review"],
+  impl_review: ["test", "impl"],           // approve->test, reject->impl
+  test:        ["done", "impl"],           // pass->done, fail->impl
+  done:        [],
+};
+
 function getDb(): Database.Database {
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
@@ -51,6 +62,32 @@ function getDb(): Database.Database {
     db.exec(`ALTER TABLE tasks ADD COLUMN rank INTEGER NOT NULL DEFAULT 0`);
   } catch { /* column already exists */ }
 
+  // 7-column pipeline: new columns
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN plan_review_comments TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN test_results TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN agent_log TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN current_agent TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN plan_review_count INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN impl_review_count INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN planned_at TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN tested_at TEXT`);
+  } catch { /* column already exists */ }
+
   // Backfill rank for existing rows (rank=0) with 1000-unit spacing per project+status group
   db.exec(`
     UPDATE tasks SET rank = (
@@ -66,6 +103,10 @@ function getDb(): Database.Database {
   db.exec(`UPDATE tasks SET priority = 'high' WHERE priority = '높음'`);
   db.exec(`UPDATE tasks SET priority = 'medium' WHERE priority = '중간'`);
   db.exec(`UPDATE tasks SET priority = 'low' WHERE priority = '낮음'`);
+
+  // Migrate old 4-column statuses to 7-column pipeline
+  db.exec(`UPDATE tasks SET status = 'impl' WHERE status = 'inprogress'`);
+  db.exec(`UPDATE tasks SET status = 'impl_review' WHERE status = 'review'`);
 
   return db;
 }
@@ -92,16 +133,27 @@ interface Task {
   implementation_notes: string | null;
   tags: string | null;
   review_comments: string | null;
+  plan_review_comments: string | null;
+  test_results: string | null;
+  agent_log: string | null;
+  current_agent: string | null;
+  plan_review_count: number;
+  impl_review_count: number;
   created_at: string;
   started_at: string | null;
+  planned_at: string | null;
   reviewed_at: string | null;
+  tested_at: string | null;
   completed_at: string | null;
 }
 
 interface Board {
   todo: Task[];
-  inprogress: Task[];
-  review: Task[];
+  plan: Task[];
+  plan_review: Task[];
+  impl: Task[];
+  impl_review: Task[];
+  test: Task[];
   done: Task[];
   projects: string[];
 }
@@ -159,8 +211,11 @@ export function kanbanApiPlugin(): Plugin {
 
             const board: Board = {
               todo: tasks.filter((t) => t.status === "todo"),
-              inprogress: tasks.filter((t) => t.status === "inprogress"),
-              review: tasks.filter((t) => t.status === "review"),
+              plan: tasks.filter((t) => t.status === "plan"),
+              plan_review: tasks.filter((t) => t.status === "plan_review"),
+              impl: tasks.filter((t) => t.status === "impl"),
+              impl_review: tasks.filter((t) => t.status === "impl_review"),
+              test: tasks.filter((t) => t.status === "test"),
               done: tasks.filter((t) => t.status === "done"),
               projects,
             };
@@ -202,22 +257,44 @@ export function kanbanApiPlugin(): Plugin {
           const body = await parseBody(req);
           const db = getDb();
           try {
+            // Status transition validation
+            if (body.status !== undefined) {
+              const task = db
+                .prepare("SELECT status FROM tasks WHERE id = ?")
+                .get(id) as { status: string } | undefined;
+              if (task) {
+                const allowed = VALID_TRANSITIONS[task.status];
+                if (allowed && !allowed.includes(body.status)) {
+                  res.statusCode = 400;
+                  res.end(JSON.stringify({
+                    error: `Invalid transition: ${task.status} -> ${body.status}`,
+                    allowed,
+                  }));
+                  return;
+                }
+              }
+            }
+
             const sets: string[] = [];
             const values: any[] = [];
 
             if (body.status !== undefined) {
               sets.push("status = ?");
               values.push(body.status);
-              if (body.status === "inprogress") {
-                sets.push("started_at = datetime('now')");
-              } else if (body.status === "review") {
-                sets.push("reviewed_at = NULL");
+              if (body.status === "plan") {
+                sets.push("started_at = COALESCE(started_at, datetime('now'))");
+              } else if (body.status === "plan_review") {
+                sets.push("planned_at = datetime('now')");
+              } else if (body.status === "test") {
+                sets.push("tested_at = datetime('now')");
               } else if (body.status === "done") {
                 sets.push("completed_at = datetime('now')");
               } else if (body.status === "todo") {
                 sets.push("started_at = NULL");
+                sets.push("planned_at = NULL");
                 sets.push("completed_at = NULL");
                 sets.push("reviewed_at = NULL");
+                sets.push("tested_at = NULL");
               }
             }
             if (body.title !== undefined) {
@@ -255,6 +332,34 @@ export function kanbanApiPlugin(): Plugin {
                   ? body.review_comments
                   : JSON.stringify(body.review_comments)
               );
+            }
+            if (body.plan_review_comments !== undefined) {
+              sets.push("plan_review_comments = ?");
+              values.push(
+                typeof body.plan_review_comments === "string"
+                  ? body.plan_review_comments
+                  : JSON.stringify(body.plan_review_comments)
+              );
+            }
+            if (body.test_results !== undefined) {
+              sets.push("test_results = ?");
+              values.push(
+                typeof body.test_results === "string"
+                  ? body.test_results
+                  : JSON.stringify(body.test_results)
+              );
+            }
+            if (body.agent_log !== undefined) {
+              sets.push("agent_log = ?");
+              values.push(
+                typeof body.agent_log === "string"
+                  ? body.agent_log
+                  : JSON.stringify(body.agent_log)
+              );
+            }
+            if (body.current_agent !== undefined) {
+              sets.push("current_agent = ?");
+              values.push(body.current_agent);
             }
             if (body.reviewed_at !== undefined) {
               sets.push("reviewed_at = ?");
@@ -301,20 +406,34 @@ export function kanbanApiPlugin(): Plugin {
             const targetStatus = body.status || task.status;
             const project = task.project;
 
-            // Update status if changed
+            // Status transition validation for drag-and-drop
             if (targetStatus !== task.status) {
+              const allowed = VALID_TRANSITIONS[task.status];
+              if (allowed && !allowed.includes(targetStatus)) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({
+                  error: `Invalid transition: ${task.status} -> ${targetStatus}`,
+                  allowed,
+                }));
+                return;
+              }
+
               const sets: string[] = ["status = ?"];
               const vals: any[] = [targetStatus];
-              if (targetStatus === "inprogress") {
-                sets.push("started_at = datetime('now')");
-              } else if (targetStatus === "review") {
-                sets.push("reviewed_at = NULL");
+              if (targetStatus === "plan") {
+                sets.push("started_at = COALESCE(started_at, datetime('now'))");
+              } else if (targetStatus === "plan_review") {
+                sets.push("planned_at = datetime('now')");
+              } else if (targetStatus === "test") {
+                sets.push("tested_at = datetime('now')");
               } else if (targetStatus === "done") {
                 sets.push("completed_at = datetime('now')");
               } else if (targetStatus === "todo") {
                 sets.push("started_at = NULL");
+                sets.push("planned_at = NULL");
                 sets.push("completed_at = NULL");
                 sets.push("reviewed_at = NULL");
+                sets.push("tested_at = NULL");
               }
               vals.push(id);
               db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
@@ -421,8 +540,8 @@ export function kanbanApiPlugin(): Plugin {
           const db = getDb();
           try {
             const task = db
-              .prepare("SELECT review_comments FROM tasks WHERE id = ?")
-              .get(id) as { review_comments: string | null } | undefined;
+              .prepare("SELECT review_comments, status, impl_review_count FROM tasks WHERE id = ?")
+              .get(id) as { review_comments: string | null; status: string; impl_review_count: number } | undefined;
 
             if (!task) {
               res.statusCode = 404;
@@ -441,14 +560,140 @@ export function kanbanApiPlugin(): Plugin {
             };
             comments.push(newComment);
 
+            // impl_review -> test (approved) or impl (changes_requested)
             const newStatus =
-              body.status === "approved" ? "done" : "inprogress";
+              body.status === "approved" ? "test" : "impl";
             const sets = [
               "review_comments = ?",
               "reviewed_at = datetime('now')",
               "status = ?",
+              "impl_review_count = ?",
             ];
-            const vals: any[] = [JSON.stringify(comments), newStatus];
+            const vals: any[] = [
+              JSON.stringify(comments),
+              newStatus,
+              task.impl_review_count + 1,
+            ];
+
+            if (newStatus === "test") {
+              sets.push("tested_at = datetime('now')");
+            }
+
+            vals.push(id);
+            db.prepare(
+              `UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`
+            ).run(...vals);
+
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({ success: true, newStatus, comment: newComment })
+            );
+          } finally {
+            db.close();
+          }
+          return;
+        }
+
+        // POST /api/task/:id/plan-review  (plan review result)
+        if (
+          req.url?.match(/^\/api\/task\/\d+\/plan-review$/) &&
+          req.method === "POST"
+        ) {
+          const id = req.url.split("/")[3];
+          const body = await parseBody(req);
+          const db = getDb();
+          try {
+            const task = db
+              .prepare("SELECT plan_review_comments, status, plan_review_count FROM tasks WHERE id = ?")
+              .get(id) as { plan_review_comments: string | null; status: string; plan_review_count: number } | undefined;
+
+            if (!task) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "Not found" }));
+              return;
+            }
+
+            const comments = task.plan_review_comments
+              ? JSON.parse(task.plan_review_comments)
+              : [];
+            const newComment = {
+              reviewer: body.reviewer || "plan-review-agent",
+              status: body.status,
+              comment: body.comment,
+              timestamp: new Date().toISOString(),
+            };
+            comments.push(newComment);
+
+            // plan_review -> impl (approved) or plan (changes_requested)
+            const newStatus =
+              body.status === "approved" ? "impl" : "plan";
+            const sets = [
+              "plan_review_comments = ?",
+              "status = ?",
+              "plan_review_count = ?",
+            ];
+            const vals: any[] = [
+              JSON.stringify(comments),
+              newStatus,
+              task.plan_review_count + 1,
+            ];
+
+            vals.push(id);
+            db.prepare(
+              `UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`
+            ).run(...vals);
+
+            res.setHeader("Content-Type", "application/json");
+            res.end(
+              JSON.stringify({ success: true, newStatus, comment: newComment })
+            );
+          } finally {
+            db.close();
+          }
+          return;
+        }
+
+        // POST /api/task/:id/test-result  (test result)
+        if (
+          req.url?.match(/^\/api\/task\/\d+\/test-result$/) &&
+          req.method === "POST"
+        ) {
+          const id = req.url.split("/")[3];
+          const body = await parseBody(req);
+          const db = getDb();
+          try {
+            const task = db
+              .prepare("SELECT test_results, status FROM tasks WHERE id = ?")
+              .get(id) as { test_results: string | null; status: string } | undefined;
+
+            if (!task) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "Not found" }));
+              return;
+            }
+
+            const results = task.test_results
+              ? JSON.parse(task.test_results)
+              : [];
+            const newResult = {
+              tester: body.tester || "test-runner-agent",
+              status: body.status,
+              lint: body.lint || null,
+              build: body.build || null,
+              tests: body.tests || null,
+              comment: body.comment || null,
+              timestamp: new Date().toISOString(),
+            };
+            results.push(newResult);
+
+            // test -> done (pass) or impl (fail)
+            const newStatus =
+              body.status === "pass" ? "done" : "impl";
+            const sets = [
+              "test_results = ?",
+              "status = ?",
+            ];
+            const vals: any[] = [JSON.stringify(results), newStatus];
 
             if (newStatus === "done") {
               sets.push("completed_at = datetime('now')");
@@ -461,7 +706,7 @@ export function kanbanApiPlugin(): Plugin {
 
             res.setHeader("Content-Type", "application/json");
             res.end(
-              JSON.stringify({ success: true, newStatus, comment: newComment })
+              JSON.stringify({ success: true, newStatus, result: newResult })
             );
           } finally {
             db.close();

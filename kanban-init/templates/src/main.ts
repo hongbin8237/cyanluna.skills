@@ -10,26 +10,48 @@ interface Task {
   implementation_notes: string | null;
   tags: string | null;
   review_comments: string | null;
+  plan_review_comments: string | null;
+  test_results: string | null;
+  agent_log: string | null;
+  current_agent: string | null;
+  plan_review_count: number;
+  impl_review_count: number;
   created_at: string;
   started_at: string | null;
+  planned_at: string | null;
   reviewed_at: string | null;
+  tested_at: string | null;
   completed_at: string | null;
 }
 
 interface Board {
   todo: Task[];
-  inprogress: Task[];
-  review: Task[];
+  plan: Task[];
+  plan_review: Task[];
+  impl: Task[];
+  impl_review: Task[];
+  test: Task[];
   done: Task[];
   projects: string[];
 }
 
 const COLUMNS = [
-  { key: "todo", label: "To Do", icon: "\u{1F4CB}" },
-  { key: "inprogress", label: "In Progress", icon: "\u{1F528}" },
-  { key: "review", label: "Review", icon: "\u{1F50D}" },
-  { key: "done", label: "Done", icon: "\u2705" },
+  { key: "todo",        label: "Requirements", icon: "\u{1F4CB}" },
+  { key: "plan",        label: "Plan",         icon: "\u{1F5FA}\uFE0F" },
+  { key: "plan_review", label: "Review Plan",  icon: "\u{1F50D}" },
+  { key: "impl",        label: "Implement",    icon: "\u{1F528}" },
+  { key: "impl_review", label: "Review Impl",  icon: "\u{1F4DD}" },
+  { key: "test",        label: "Test",         icon: "\u{1F9EA}" },
+  { key: "done",        label: "Done",         icon: "\u2705" },
 ];
+
+const STATUS_BADGES: Record<string, string> = {
+  plan:        "Planning",
+  plan_review: "Plan Review",
+  impl:        "Implementing",
+  impl_review: "Impl Review",
+  test:        "Testing",
+};
 
 let currentProject: string | null = null;
 let isDragging = false;
@@ -62,10 +84,10 @@ function timeAgo(dateStr: string): string {
   return dateStr.slice(0, 10);
 }
 
-function parseReviewComments(task: Task): any[] {
-  if (!task.review_comments) return [];
+function parseJsonArray(raw: string | null): any[] {
+  if (!raw) return [];
   try {
-    return JSON.parse(task.review_comments);
+    return JSON.parse(raw);
   } catch {
     return [];
   }
@@ -88,14 +110,37 @@ function renderCard(task: Task): string {
       ? `<span class="badge project">${task.project}</span>`
       : "";
 
-  const reviewComments = parseReviewComments(task);
+  // Status badge for pipeline stages
+  const statusLabel = STATUS_BADGES[task.status];
+  const statusBadge = statusLabel
+    ? `<span class="badge status-${task.status}">${statusLabel}</span>`
+    : "";
+
+  // Agent tag
+  const agentBadge = task.current_agent
+    ? `<span class="badge agent-tag">${task.current_agent}</span>`
+    : "";
+
+  // Review badge (impl_review)
+  const reviewComments = parseJsonArray(task.review_comments);
   const lastReview = reviewComments.length > 0 ? reviewComments[reviewComments.length - 1] : null;
   const reviewBadge = lastReview
     ? `<span class="badge ${lastReview.status === 'approved' ? 'review-approved' : 'review-changes'}">${
-        lastReview.status === 'approved' ? 'Approved' : 'Changes Requested'
+        lastReview.status === 'approved' ? 'Approved' : 'Changes Req.'
       }</span>`
-    : task.status === 'review'
+    : task.status === 'impl_review'
       ? '<span class="badge review-pending">Awaiting Review</span>'
+      : '';
+
+  // Plan review badge
+  const planReviewComments = parseJsonArray(task.plan_review_comments);
+  const lastPlanReview = planReviewComments.length > 0 ? planReviewComments[planReviewComments.length - 1] : null;
+  const planReviewBadge = lastPlanReview
+    ? `<span class="badge ${lastPlanReview.status === 'approved' ? 'review-approved' : 'review-changes'}">${
+        lastPlanReview.status === 'approved' ? 'Plan OK' : 'Plan Changes'
+      }</span>`
+    : task.status === 'plan_review'
+      ? '<span class="badge review-pending">Plan Review</span>'
       : '';
 
   const tags = parseTags(task.tags)
@@ -111,12 +156,15 @@ function renderCard(task: Task): string {
       <div class="card-header">
         <span class="card-id">#${task.id}</span>
         ${priorityBadge}
-        ${reviewBadge}
+        ${statusBadge}
+        ${agentBadge}
       </div>
       <div class="card-title">${task.title}</div>
       ${desc ? `<div class="card-desc">${desc}</div>` : ""}
       <div class="card-footer">
         ${projectBadge}
+        ${planReviewBadge}
+        ${reviewBadge}
         ${dateBadge}
       </div>
       ${tags ? `<div class="card-tags">${tags}</div>` : ""}
@@ -262,6 +310,39 @@ function renderLifecycleSection(
   `;
 }
 
+function renderReviewEntries(comments: any[]): string {
+  if (comments.length === 0) return '';
+  return comments.map((rc: any) => `
+    <div class="review-entry ${rc.status}">
+      <div class="review-header">
+        <span class="badge ${rc.status === 'approved' ? 'review-approved' : 'review-changes'}">
+          ${rc.status === 'approved' ? 'Approved' : 'Changes Requested'}
+        </span>
+        <span class="review-meta">${rc.reviewer || ''} &middot; ${rc.timestamp?.slice(0, 16) || ''}</span>
+      </div>
+      <div class="review-comment">${simpleMarkdownToHtml(rc.comment || '')}</div>
+    </div>
+  `).join('');
+}
+
+function renderTestEntries(results: any[]): string {
+  if (results.length === 0) return '';
+  return results.map((r: any) => `
+    <div class="review-entry ${r.status === 'pass' ? 'approved' : 'changes_requested'}">
+      <div class="review-header">
+        <span class="badge ${r.status === 'pass' ? 'review-approved' : 'review-changes'}">
+          ${r.status === 'pass' ? 'Pass' : 'Fail'}
+        </span>
+        <span class="review-meta">${r.tester || ''} &middot; ${r.timestamp?.slice(0, 16) || ''}</span>
+      </div>
+      ${r.lint ? `<div class="test-output"><strong>Lint:</strong> <pre>${r.lint}</pre></div>` : ''}
+      ${r.build ? `<div class="test-output"><strong>Build:</strong> <pre>${r.build}</pre></div>` : ''}
+      ${r.tests ? `<div class="test-output"><strong>Tests:</strong> <pre>${r.tests}</pre></div>` : ''}
+      ${r.comment ? `<div class="review-comment">${simpleMarkdownToHtml(r.comment)}</div>` : ''}
+    </div>
+  `).join('');
+}
+
 async function showTaskDetail(id: number) {
   const overlay = document.getElementById("modal-overlay")!;
   const content = document.getElementById("modal-content")!;
@@ -285,8 +366,14 @@ async function showTaskDetail(id: number) {
       task.started_at
         ? `<strong>Started:</strong> ${task.started_at.slice(0, 10)}`
         : "",
+      task.planned_at
+        ? `<strong>Planned:</strong> ${task.planned_at.slice(0, 10)}`
+        : "",
       task.reviewed_at
         ? `<strong>Reviewed:</strong> ${task.reviewed_at.slice(0, 10)}`
+        : "",
+      task.tested_at
+        ? `<strong>Tested:</strong> ${task.tested_at.slice(0, 10)}`
         : "",
       task.completed_at
         ? `<strong>Completed:</strong> ${task.completed_at.slice(0, 10)}`
@@ -295,11 +382,25 @@ async function showTaskDetail(id: number) {
       .filter(Boolean)
       .join(" &nbsp;|&nbsp; ");
 
+    // 7-step progress bar
     const statusPhase: Record<string, number> = {
-      todo: 0, inprogress: 1, review: 3, done: 4,
+      todo: 0, plan: 1, plan_review: 2, impl: 3, impl_review: 4, test: 5, done: 6,
     };
     const currentPhase = statusPhase[task.status] ?? 0;
 
+    const phases = ['Req', 'Plan', 'Plan Rev', 'Impl', 'Impl Rev', 'Test', 'Done'];
+    const progressHtml = `
+      <div class="lifecycle-progress">
+        ${phases.map((p, i) => `
+          <div class="progress-step ${i < currentPhase ? 'completed' : ''} ${i === currentPhase ? 'current' : ''}">
+            <div class="step-dot"></div>
+            <span class="step-label">${p}</span>
+          </div>
+        `).join('<div class="progress-line"></div>')}
+      </div>
+    `;
+
+    // Requirements section (editable)
     const reqBody = task.description
       ? simpleMarkdownToHtml(task.description)
       : `<span class="phase-empty">Not yet documented</span>`;
@@ -321,54 +422,90 @@ async function showTaskDetail(id: number) {
       </div>
     `;
 
+    // Plan section
     const planSection = renderLifecycleSection(
       'Plan', '\u{1F5FA}\uFE0F', 'phase-plan',
       task.plan, currentPhase === 1 && !task.plan
     );
 
+    // Plan Review section
+    const planReviewComments = parseJsonArray(task.plan_review_comments);
+    const planReviewContent = renderReviewEntries(planReviewComments);
+    let planReviewSection = '';
+    if (planReviewContent || currentPhase === 2) {
+      planReviewSection = `
+        <div class="lifecycle-phase phase-plan-review ${currentPhase === 2 ? 'active' : ''}">
+          <div class="phase-header">
+            <span class="phase-icon">\u{1F50D}</span>
+            <span class="phase-label">Plan Review</span>
+            ${task.plan_review_count > 0 ? `<span class="review-count">${task.plan_review_count} review(s)</span>` : ''}
+          </div>
+          <div class="phase-body">${planReviewContent || '<span class="phase-empty">Awaiting plan review</span>'}</div>
+        </div>
+      `;
+    }
+
+    // Implementation section
     const implSection = renderLifecycleSection(
       'Implementation', '\u{1F528}', 'phase-impl',
-      task.implementation_notes, currentPhase === 1 && !!task.plan
+      task.implementation_notes, currentPhase === 3 && !task.implementation_notes
     );
 
-    const reviewComments = parseReviewComments(task);
-    const reviewContent = reviewComments.length > 0
-      ? reviewComments.map((rc: any) => `
-          <div class="review-entry ${rc.status}">
-            <div class="review-header">
-              <span class="badge ${rc.status === 'approved' ? 'review-approved' : 'review-changes'}">
-                ${rc.status === 'approved' ? 'Approved' : 'Changes Requested'}
-              </span>
-              <span class="review-meta">${rc.reviewer || ''} &middot; ${rc.timestamp?.slice(0, 16) || ''}</span>
-            </div>
-            <div class="review-comment">${simpleMarkdownToHtml(rc.comment || '')}</div>
+    // Impl Review section
+    const reviewComments = parseJsonArray(task.review_comments);
+    const reviewContent = renderReviewEntries(reviewComments);
+    let reviewSection = '';
+    if (reviewContent || currentPhase === 4) {
+      reviewSection = `
+        <div class="lifecycle-phase phase-review ${currentPhase === 4 ? 'active' : ''}">
+          <div class="phase-header">
+            <span class="phase-icon">\u{1F4DD}</span>
+            <span class="phase-label">Implementation Review</span>
+            ${task.impl_review_count > 0 ? `<span class="review-count">${task.impl_review_count} review(s)</span>` : ''}
           </div>
-        `).join('')
-      : null;
-    const reviewSection = reviewContent || currentPhase === 3
-      ? renderLifecycleSection(
-          'Review', '\u{1F50D}', 'phase-review',
-          null, currentPhase === 3
-        ).replace(
-          '<div class="phase-body">',
-          `<div class="phase-body">${reviewContent || ''}`
-        ).replace(
-          '<span class="phase-empty">Not yet documented</span>',
-          reviewContent ? '' : '<span class="phase-empty">Awaiting review</span>'
-        )
-      : '';
+          <div class="phase-body">${reviewContent || '<span class="phase-empty">Awaiting implementation review</span>'}</div>
+        </div>
+      `;
+    }
 
-    const phases = ['Requirements', 'Plan', 'Implementation', 'Review', 'Done'];
-    const progressHtml = `
-      <div class="lifecycle-progress">
-        ${phases.map((p, i) => `
-          <div class="progress-step ${i < currentPhase ? 'completed' : ''} ${i === currentPhase ? 'current' : ''}">
-            <div class="step-dot"></div>
-            <span class="step-label">${p}</span>
+    // Test Results section
+    const testResults = parseJsonArray(task.test_results);
+    const testContent = renderTestEntries(testResults);
+    let testSection = '';
+    if (testContent || currentPhase === 5) {
+      testSection = `
+        <div class="lifecycle-phase phase-test ${currentPhase === 5 ? 'active' : ''}">
+          <div class="phase-header">
+            <span class="phase-icon">\u{1F9EA}</span>
+            <span class="phase-label">Test Results</span>
           </div>
-        `).join('<div class="progress-line"></div>')}
-      </div>
-    `;
+          <div class="phase-body">${testContent || '<span class="phase-empty">Awaiting test execution</span>'}</div>
+        </div>
+      `;
+    }
+
+    // Agent Log section (collapsible)
+    const agentLogs = parseJsonArray(task.agent_log);
+    let agentLogSection = '';
+    if (agentLogs.length > 0) {
+      const logEntries = agentLogs.map((entry: any) => `
+        <div class="agent-log-entry">
+          <span class="agent-log-time">${entry.timestamp?.slice(0, 16) || ''}</span>
+          <span class="badge agent-tag">${entry.agent || ''}</span>
+          <span class="agent-log-msg">${entry.message || ''}</span>
+        </div>
+      `).join('');
+      agentLogSection = `
+        <details class="lifecycle-phase phase-agent-log">
+          <summary class="phase-header">
+            <span class="phase-icon">\u{1F916}</span>
+            <span class="phase-label">Agent Log</span>
+            <span class="review-count">${agentLogs.length} entries</span>
+          </summary>
+          <div class="phase-body agent-log-body">${logEntries}</div>
+        </details>
+      `;
+    }
 
     content.innerHTML = `
       <h1>#${task.id} ${task.title}</h1>
@@ -378,8 +515,11 @@ async function showTaskDetail(id: number) {
       <div class="lifecycle-sections">
         ${requirementSection}
         ${planSection}
+        ${planReviewSection}
         ${implSection}
         ${reviewSection}
+        ${testSection}
+        ${agentLogSection}
       </div>
     `;
 
@@ -418,15 +558,6 @@ async function showTaskDetail(id: number) {
   }
 }
 
-async function moveTask(id: number, newStatus: string) {
-  await fetch(`/api/task/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status: newStatus }),
-  });
-  loadBoard();
-}
-
 async function loadBoard() {
   const board = document.getElementById("board")!;
   const params = currentProject ? `?project=${encodeURIComponent(currentProject)}` : "";
@@ -442,11 +573,12 @@ async function loadBoard() {
         col.key,
         col.label,
         col.icon,
-        data[col.key as keyof Pick<Board, "todo" | "inprogress" | "review" | "done">]
+        data[col.key as keyof Omit<Board, "projects">]
       )
     ).join("");
 
-    const total = data.todo.length + data.inprogress.length + data.review.length + data.done.length;
+    const total = data.todo.length + data.plan.length + data.plan_review.length +
+      data.impl.length + data.impl_review.length + data.test.length + data.done.length;
     document.getElementById("count-summary")!.textContent =
       `${data.done.length}/${total} completed`;
 
@@ -590,14 +722,33 @@ function setupDragAndDrop() {
         afterId = parseInt((cardsInCol[cardsInCol.length - 1] as HTMLElement).dataset.id!);
       }
 
-      await fetch(`/api/task/${id}/reorder`, {
+      const resp = await fetch(`/api/task/${id}/reorder`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus, afterId, beforeId }),
       });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        if (err.error) {
+          // Show brief toast for invalid transitions
+          showToast(err.error);
+        }
+      }
       loadBoard();
     });
   });
+}
+
+function showToast(message: string) {
+  const existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 // Set tab title to project name
@@ -605,8 +756,8 @@ fetch("/api/info")
   .then((r) => r.json())
   .then((info: { projectName: string }) => {
     if (info.projectName) {
-      document.title = `Kanban · ${info.projectName}`;
-      document.querySelector("header h1")!.textContent = `Kanban · ${info.projectName}`;
+      document.title = `Kanban \u00b7 ${info.projectName}`;
+      document.querySelector("header h1")!.textContent = `Kanban \u00b7 ${info.projectName}`;
     }
   })
   .catch(() => {});
