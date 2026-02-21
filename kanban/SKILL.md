@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS tasks (
 | `current_agent` | TEXT | Currently active agent name |
 | `plan_review_count` | INTEGER | Number of plan review iterations |
 | `impl_review_count` | INTEGER | Number of impl review iterations |
+| `level` | INTEGER | Pipeline level: 1 (Quick), 2 (Standard), 3 (Full) |
+
+## Pipeline Levels
+
+Tasks have a `level` (1-3) that determines the pipeline path:
+
+| Level | Path | Use Case |
+|-------|------|----------|
+| L1 Quick | `Req → Impl → Done` | File cleanup, config changes, typo fixes |
+| L2 Standard | `Req → Plan → Impl → Review → Done` | Feature edits, bug fixes, refactoring |
+| L3 Full | `Req → Plan → Plan Rev → Impl → Impl Rev → Test → Done` | New features, architecture changes |
+
+Level is set when creating a task (`/kanban add`) and stored in the `level` column.
 
 ## 7-Column AI Team Pipeline
 
@@ -263,12 +276,12 @@ Output format:
 ### Add Task
 `/kanban add <title>`
 
-1. Ask the user for priority, description, and tags (use AskUserQuestion)
+1. Ask the user for priority, level (L1/L2/L3), description, and tags (use AskUserQuestion)
 2. Create via API:
 ```bash
 curl -s -X POST http://localhost:5173/api/task \
   -H 'Content-Type: application/json' \
-  -d "{\"title\": \"$TITLE\", \"project\": \"$PROJECT\", \"priority\": \"$PRIORITY\", \"description\": \"$DESC\"}"
+  -d "{\"title\": \"$TITLE\", \"project\": \"$PROJECT\", \"priority\": \"$PRIORITY\", \"level\": $LEVEL, \"description\": \"$DESC\"}"
 ```
 3. Output confirmation with the new task ID
 
@@ -289,19 +302,33 @@ The API enforces valid transitions. Invalid moves return 400 with allowed transi
 **Default mode**: Pauses for user confirmation at Plan Review approval and Impl Review approval.
 **Auto mode**: `/kanban run <ID> --auto` — Fully automatic (no pauses except circuit breaker).
 
-#### Pipeline Loop
+#### Pipeline Loop (Level-Aware)
+
+The pipeline path depends on the task's `level`:
 
 ```
-Loop:
+L1 Quick:
+  1. todo → Worker(opus) implements → done
+  Complete!
+
+L2 Standard:
+  1. todo → Plan Agent (opus) → impl (skip plan_review)
+  2. impl → Worker(opus) then TDD Tester(sonnet) → impl_review
+  3. impl_review → Code Review → user confirm → approve:done / reject:impl
+  4. done → Complete!
+
+L3 Full:
   1. todo → Plan Agent (opus) → plan_review
-  2. plan_review → Review Agent (gemini/codex/sonnet) → user confirm → approve:impl / reject:plan
-  3. impl → Worker(opus) then TDD Tester(sonnet) sequential → impl_review
-  4. impl_review → Code Review(gemini/codex/sonnet) → user confirm → approve:test / reject:impl
+  2. plan_review → Review Agent → user confirm → approve:impl / reject:plan
+  3. impl → Worker(opus) then TDD Tester(sonnet) → impl_review
+  4. impl_review → Code Review → user confirm → approve:test / reject:impl
   5. test → Test Runner(sonnet) → pass:done / fail:impl
   6. done → Complete!
 
 Circuit breaker: plan_review_count > 3 OR impl_review_count > 3 → stop and ask user
 ```
+
+Read the task's `level` field first to determine which steps to execute.
 
 #### Implementation
 
@@ -670,6 +697,7 @@ sqlite3 .claude/kanban.db "
     current_agent TEXT,
     plan_review_count INTEGER NOT NULL DEFAULT 0,
     impl_review_count INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 3,
     created_at TEXT DEFAULT (datetime('now')),
     started_at TEXT,
     planned_at TEXT,

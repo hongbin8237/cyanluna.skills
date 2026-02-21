@@ -363,6 +363,38 @@ main#board {
   text-transform: none;
 }
 
+/* Level badges */
+.badge.level-1 {
+  background: #064e3b;
+  color: #6ee7b7;
+  text-transform: none;
+  font-size: 0.55rem;
+}
+.badge.level-2 {
+  background: #78350f;
+  color: #fde68a;
+  text-transform: none;
+  font-size: 0.55rem;
+}
+.badge.level-3 {
+  background: #4c1d95;
+  color: #c4b5fd;
+  text-transform: none;
+  font-size: 0.55rem;
+}
+
+/* Level indicator in progress bar */
+.level-indicator {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #64748b;
+  background: #1e293b;
+  border: 1px solid #334155;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-right: 8px;
+}
+
 /* Agent tag badge */
 .badge.agent-tag {
   background: #1e3a5f;
@@ -891,6 +923,13 @@ details.phase-agent-log[open] > summary::before {
 }
 .form-group textarea {
   resize: vertical;
+}
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+.form-row .form-col {
+  flex: 1;
 }
 .form-submit {
   width: 100%;

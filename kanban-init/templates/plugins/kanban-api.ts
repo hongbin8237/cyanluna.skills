@@ -10,16 +10,37 @@ const DB_PATH =
   process.env.KANBAN_DB ||
   path.resolve(__dirname, "..", "..", ".claude", "kanban.db");
 
-// Valid status transitions for the 7-column pipeline
-const VALID_TRANSITIONS: Record<string, string[]> = {
-  todo:        ["plan"],
-  plan:        ["plan_review", "todo"],
-  plan_review: ["impl", "plan"],           // approve->impl, reject->plan
-  impl:        ["impl_review"],
-  impl_review: ["test", "impl"],           // approve->test, reject->impl
-  test:        ["done", "impl"],           // pass->done, fail->impl
-  done:        [],
-};
+// Valid status transitions per pipeline level
+function getTransitions(level: number): Record<string, string[]> {
+  if (level === 1) {
+    // L1 Quick: Req → Impl → Done
+    return {
+      todo: ["impl"],
+      impl: ["done"],
+      done: [],
+    };
+  }
+  if (level === 2) {
+    // L2 Standard: Req → Plan → Impl → Review Impl → Done
+    return {
+      todo:        ["plan"],
+      plan:        ["impl", "todo"],
+      impl:        ["impl_review"],
+      impl_review: ["done", "impl"],
+      done:        [],
+    };
+  }
+  // L3 Full pipeline (default)
+  return {
+    todo:        ["plan"],
+    plan:        ["plan_review", "todo"],
+    plan_review: ["impl", "plan"],
+    impl:        ["impl_review"],
+    impl_review: ["test", "impl"],
+    test:        ["done", "impl"],
+    done:        [],
+  };
+}
 
 function getDb(): Database.Database {
   const db = new Database(DB_PATH);
@@ -87,6 +108,9 @@ function getDb(): Database.Database {
   try {
     db.exec(`ALTER TABLE tasks ADD COLUMN tested_at TEXT`);
   } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN level INTEGER NOT NULL DEFAULT 3`);
+  } catch { /* column already exists */ }
 
   // Backfill rank for existing rows (rank=0) with 1000-unit spacing per project+status group
   db.exec(`
@@ -139,6 +163,7 @@ interface Task {
   current_agent: string | null;
   plan_review_count: number;
   impl_review_count: number;
+  level: number;
   created_at: string;
   started_at: string | null;
   planned_at: string | null;
@@ -260,14 +285,15 @@ export function kanbanApiPlugin(): Plugin {
             // Status transition validation
             if (body.status !== undefined) {
               const task = db
-                .prepare("SELECT status FROM tasks WHERE id = ?")
-                .get(id) as { status: string } | undefined;
+                .prepare("SELECT status, level FROM tasks WHERE id = ?")
+                .get(id) as { status: string; level: number } | undefined;
               if (task) {
-                const allowed = VALID_TRANSITIONS[task.status];
+                const transitions = getTransitions(task.level);
+                const allowed = transitions[task.status];
                 if (allowed && !allowed.includes(body.status)) {
                   res.statusCode = 400;
                   res.end(JSON.stringify({
-                    error: `Invalid transition: ${task.status} -> ${body.status}`,
+                    error: `Invalid transition: ${task.status} -> ${body.status} (L${task.level})`,
                     allowed,
                   }));
                   return;
@@ -369,6 +395,10 @@ export function kanbanApiPlugin(): Plugin {
               sets.push("rank = ?");
               values.push(body.rank);
             }
+            if (body.level !== undefined) {
+              sets.push("level = ?");
+              values.push(body.level);
+            }
 
             if (sets.length > 0) {
               values.push(id);
@@ -408,11 +438,12 @@ export function kanbanApiPlugin(): Plugin {
 
             // Status transition validation for drag-and-drop
             if (targetStatus !== task.status) {
-              const allowed = VALID_TRANSITIONS[task.status];
+              const transitions = getTransitions(task.level);
+              const allowed = transitions[task.status];
               if (allowed && !allowed.includes(targetStatus)) {
                 res.statusCode = 400;
                 res.end(JSON.stringify({
-                  error: `Invalid transition: ${task.status} -> ${targetStatus}`,
+                  error: `Invalid transition: ${task.status} -> ${targetStatus} (L${task.level})`,
                   allowed,
                 }));
                 return;
@@ -508,6 +539,8 @@ export function kanbanApiPlugin(): Plugin {
                   : JSON.stringify(body.tags)
                 : null;
 
+            const level = body.level !== undefined ? parseInt(body.level) || 3 : 3;
+
             const maxRankRow = db
               .prepare("SELECT MAX(rank) as maxRank FROM tasks WHERE project = ? AND status = 'todo'")
               .get(project) as { maxRank: number | null } | undefined;
@@ -515,10 +548,10 @@ export function kanbanApiPlugin(): Plugin {
 
             const result = db
               .prepare(
-                `INSERT INTO tasks (project, title, priority, description, tags, rank)
-                 VALUES (?, ?, ?, ?, ?, ?)`
+                `INSERT INTO tasks (project, title, priority, description, tags, rank, level)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`
               )
-              .run(project, title, priority, description, tags, rank);
+              .run(project, title, priority, description, tags, rank, level);
 
             res.setHeader("Content-Type", "application/json");
             res.end(
@@ -540,8 +573,8 @@ export function kanbanApiPlugin(): Plugin {
           const db = getDb();
           try {
             const task = db
-              .prepare("SELECT review_comments, status, impl_review_count FROM tasks WHERE id = ?")
-              .get(id) as { review_comments: string | null; status: string; impl_review_count: number } | undefined;
+              .prepare("SELECT review_comments, status, impl_review_count, level FROM tasks WHERE id = ?")
+              .get(id) as { review_comments: string | null; status: string; impl_review_count: number; level: number } | undefined;
 
             if (!task) {
               res.statusCode = 404;
@@ -560,9 +593,10 @@ export function kanbanApiPlugin(): Plugin {
             };
             comments.push(newComment);
 
-            // impl_review -> test (approved) or impl (changes_requested)
+            // L2: impl_review -> done (approved), L3: impl_review -> test (approved)
+            const approvedTarget = task.level <= 2 ? "done" : "test";
             const newStatus =
-              body.status === "approved" ? "test" : "impl";
+              body.status === "approved" ? approvedTarget : "impl";
             const sets = [
               "review_comments = ?",
               "reviewed_at = datetime('now')",
@@ -577,6 +611,8 @@ export function kanbanApiPlugin(): Plugin {
 
             if (newStatus === "test") {
               sets.push("tested_at = datetime('now')");
+            } else if (newStatus === "done") {
+              sets.push("completed_at = datetime('now')");
             }
 
             vals.push(id);

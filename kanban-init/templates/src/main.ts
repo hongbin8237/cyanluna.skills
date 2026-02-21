@@ -16,6 +16,7 @@ interface Task {
   current_agent: string | null;
   plan_review_count: number;
   impl_review_count: number;
+  level: number;
   created_at: string;
   started_at: string | null;
   planned_at: string | null;
@@ -116,6 +117,9 @@ function renderCard(task: Task): string {
     ? `<span class="badge status-${task.status}">${statusLabel}</span>`
     : "";
 
+  // Level badge
+  const levelBadge = `<span class="badge level-${task.level}">L${task.level}</span>`;
+
   // Agent tag
   const agentBadge = task.current_agent
     ? `<span class="badge agent-tag">${task.current_agent}</span>`
@@ -155,6 +159,7 @@ function renderCard(task: Task): string {
     <div class="card" draggable="true" data-id="${task.id}" data-status="${task.status}">
       <div class="card-header">
         <span class="card-id">#${task.id}</span>
+        ${levelBadge}
         ${priorityBadge}
         ${statusBadge}
         ${agentBadge}
@@ -382,16 +387,19 @@ async function showTaskDetail(id: number) {
       .filter(Boolean)
       .join(" &nbsp;|&nbsp; ");
 
-    // 7-step progress bar
-    const statusPhase: Record<string, number> = {
-      todo: 0, plan: 1, plan_review: 2, impl: 3, impl_review: 4, test: 5, done: 6,
+    // Level-aware progress bar
+    const levelPhases: Record<number, { labels: string[]; statuses: string[] }> = {
+      1: { labels: ['Req', 'Impl', 'Done'], statuses: ['todo', 'impl', 'done'] },
+      2: { labels: ['Req', 'Plan', 'Impl', 'Review', 'Done'], statuses: ['todo', 'plan', 'impl', 'impl_review', 'done'] },
+      3: { labels: ['Req', 'Plan', 'Plan Rev', 'Impl', 'Impl Rev', 'Test', 'Done'], statuses: ['todo', 'plan', 'plan_review', 'impl', 'impl_review', 'test', 'done'] },
     };
-    const currentPhase = statusPhase[task.status] ?? 0;
+    const lp = levelPhases[task.level] || levelPhases[3];
+    const currentPhase = Math.max(0, lp.statuses.indexOf(task.status));
 
-    const phases = ['Req', 'Plan', 'Plan Rev', 'Impl', 'Impl Rev', 'Test', 'Done'];
     const progressHtml = `
       <div class="lifecycle-progress">
-        ${phases.map((p, i) => `
+        <span class="level-indicator">L${task.level}</span>
+        ${lp.labels.map((p, i) => `
           <div class="progress-step ${i < currentPhase ? 'completed' : ''} ${i === currentPhase ? 'current' : ''}">
             <div class="step-dot"></div>
             <span class="step-label">${p}</span>
@@ -811,6 +819,7 @@ document.getElementById("add-card-form")!.addEventListener("submit", async (e) =
   if (!title) return;
 
   const priority = (document.getElementById("add-priority") as HTMLSelectElement).value;
+  const level = parseInt((document.getElementById("add-level") as HTMLSelectElement).value) || 3;
   const description = (document.getElementById("add-description") as HTMLTextAreaElement).value.trim() || null;
   const tagsRaw = (document.getElementById("add-tags") as HTMLInputElement).value.trim();
   const tags = tagsRaw ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean) : null;
@@ -820,7 +829,7 @@ document.getElementById("add-card-form")!.addEventListener("submit", async (e) =
   await fetch("/api/task", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, priority, description, tags, project }),
+    body: JSON.stringify({ title, priority, level, description, tags, project }),
   });
 
   (document.getElementById("add-card-form") as HTMLFormElement).reset();
