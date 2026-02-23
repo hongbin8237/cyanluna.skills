@@ -232,6 +232,11 @@ curl -s -X POST "http://localhost:5173/api/task/$ID/test-result?project=$PROJECT
   -H 'Content-Type: application/json' \
   -d '{"tester": "test-runner", "status": "pass", "lint": "...", "build": "...", "tests": "...", "comment": "..."}'
 
+# Add note — project param required
+curl -s -X POST "http://localhost:5173/api/task/$ID/note?project=$PROJECT" \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "Commit: abc1234"}'
+
 # Reorder / drag-and-drop — project param required
 curl -s -X PATCH "http://localhost:5173/api/task/$ID/reorder?project=$PROJECT" \
   -H 'Content-Type: application/json' \
@@ -339,13 +344,13 @@ The pipeline path depends on the task's `level`:
 
 ```
 L1 Quick:
-  1. todo → Worker(opus) implements → done
+  1. todo → Worker(opus) implements → commit → done (note: commit hash)
   Complete!
 
 L2 Standard:
   1. todo → Plan Agent (opus) → impl (skip plan_review)
   2. impl → Worker(opus) then TDD Tester(sonnet) → impl_review
-  3. impl_review → Code Review → user confirm → approve:done / reject:impl
+  3. impl_review → Code Review → user confirm → approve → commit → done (note: commit hash) / reject:impl
   4. done → Complete!
 
 L3 Full:
@@ -353,7 +358,7 @@ L3 Full:
   2. plan_review → Review Agent → user confirm → approve:impl / reject:plan
   3. impl → Worker(opus) then TDD Tester(sonnet) → impl_review
   4. impl_review → Code Review → user confirm → approve:test / reject:impl
-  5. test → Test Runner(sonnet) → pass:done / fail:impl
+  5. test → Test Runner(sonnet) → pass → commit → done (note: commit hash) / fail:impl
   6. done → Complete!
 
 Circuit breaker: plan_review_count > 3 OR impl_review_count > 3 → stop and ask user
@@ -584,6 +589,35 @@ curl -s -X POST "http://localhost:5173/api/task/<ID>/test-result?project=<PROJEC
 
 Status must be exactly `"pass"` or `"fail"`.
 ```
+
+**`→ done` Transition (all levels)**:
+
+Before moving any card to `done`, the orchestrator must:
+
+1. **Commit** pending changes (if any):
+```bash
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  git add -A
+  git commit -m "feat: <TITLE> [kanban #<ID>]"
+fi
+COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "no-git")
+```
+
+2. **Move to done**:
+```bash
+curl -s -X PATCH "http://localhost:5173/api/task/$ID?project=$PROJECT" \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "done"}'
+```
+
+3. **Record commit hash in notes**:
+```bash
+curl -s -X POST "http://localhost:5173/api/task/$ID/note?project=$PROJECT" \
+  -H 'Content-Type: application/json' \
+  -d "{\"content\": \"Commit: $COMMIT_HASH\"}"
+```
+
+If the repo has no commits yet (`git rev-parse` fails), skip the note or record `"Commit: (none)"`.
 
 ### Step (Single Step)
 `/kanban step <ID>` — Execute only the next pipeline step for a task
