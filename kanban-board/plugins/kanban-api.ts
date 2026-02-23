@@ -68,7 +68,7 @@ function getDb(project: string): Database.Database {
 
   const dbPath = path.join(DBS_DIR, `${safe}.db`);
   const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  db.pragma("journal_mode = DELETE");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
