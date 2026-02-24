@@ -61,12 +61,18 @@ let isDragging = false;
 let currentView: "board" | "list" = "board";
 let currentSearch: string = '';
 let currentSort: string = 'default';
+let hideOldDone: boolean = false;
 
 function priorityClass(priority: string): string {
   if (priority === "high") return "high";
   if (priority === "medium") return "medium";
   if (priority === "low") return "low";
   return "";
+}
+
+function isOlderThan3Days(dateStr: string): boolean {
+  if (!dateStr) return false;
+  return Date.now() - new Date(dateStr).getTime() > 3 * 24 * 60 * 60 * 1000;
 }
 
 function sortTasks(tasks: Task[]): Task[] {
@@ -83,28 +89,40 @@ function sortTasks(tasks: Task[]): Task[] {
 
 function applySearchFilter() {
   const q = currentSearch.toLowerCase();
+  const anyFilter = q.length > 0 || hideOldDone;
+
   if (currentView === 'board') {
     document.querySelectorAll<HTMLElement>('.card').forEach(card => {
-      if (!q) { card.style.display = ''; return; }
-      const title = card.querySelector('.card-title')?.textContent?.toLowerCase() || '';
-      const desc  = card.querySelector('.card-desc')?.textContent?.toLowerCase() || '';
-      const tags  = [...card.querySelectorAll('.tag')].map(t => t.textContent?.toLowerCase() || '').join(' ');
-      card.style.display = (title.includes(q) || desc.includes(q) || tags.includes(q)) ? '' : 'none';
+      const searchOk = !q || (() => {
+        const title = card.querySelector('.card-title')?.textContent?.toLowerCase() || '';
+        const desc  = card.querySelector('.card-desc')?.textContent?.toLowerCase() || '';
+        const tags  = [...card.querySelectorAll('.tag')].map(t => t.textContent?.toLowerCase() || '').join(' ');
+        return title.includes(q) || desc.includes(q) || tags.includes(q);
+      })();
+      const doneHidden = hideOldDone
+        && card.dataset.status === 'done'
+        && isOlderThan3Days(card.dataset.completedAt || '');
+      card.style.display = (searchOk && !doneHidden) ? '' : 'none';
     });
-    // Update column counts: "visible/total" when searching
+    // Update column counts: "visible/total" when any filter is active
     document.querySelectorAll<HTMLElement>('.column').forEach(col => {
       const cards   = col.querySelectorAll<HTMLElement>('.card');
       const visible = [...cards].filter(c => c.style.display !== 'none').length;
       const countEl = col.querySelector<HTMLElement>('.count');
-      if (countEl) countEl.textContent = q ? `${visible}/${cards.length}` : `${cards.length}`;
+      if (countEl) countEl.textContent = anyFilter ? `${visible}/${cards.length}` : `${cards.length}`;
     });
   } else {
     document.querySelectorAll<HTMLElement>('#list-view tbody tr').forEach(row => {
-      if (!q) { row.style.display = ''; return; }
-      const title   = row.querySelector('.col-title')?.textContent?.toLowerCase() || '';
-      const project = (row as HTMLTableRowElement).cells[5]?.textContent?.toLowerCase() || '';
-      const tags    = [...row.querySelectorAll('.tag')].map(t => t.textContent?.toLowerCase() || '').join(' ');
-      row.style.display = (title.includes(q) || project.includes(q) || tags.includes(q)) ? '' : 'none';
+      const searchOk = !q || (() => {
+        const title   = row.querySelector('.col-title')?.textContent?.toLowerCase() || '';
+        const project = (row as HTMLTableRowElement).cells[5]?.textContent?.toLowerCase() || '';
+        const tags    = [...row.querySelectorAll('.tag')].map(t => t.textContent?.toLowerCase() || '').join(' ');
+        return title.includes(q) || project.includes(q) || tags.includes(q);
+      })();
+      const doneHidden = hideOldDone
+        && row.classList.contains('status-done')
+        && isOlderThan3Days(row.dataset.completedAt || '');
+      row.style.display = (searchOk && !doneHidden) ? '' : 'none';
     });
   }
 }
@@ -209,7 +227,7 @@ function renderCard(task: Task): string {
     : "";
 
   return `
-    <div class="card" draggable="true" data-id="${task.id}" data-status="${task.status}" data-project="${task.project}">
+    <div class="card" draggable="true" data-id="${task.id}" data-status="${task.status}" data-project="${task.project}" data-completed-at="${task.completed_at || ''}">
       <div class="card-header">
         <span class="card-id">#${task.id}</span>
         ${levelBadge}
@@ -960,7 +978,7 @@ async function loadListView() {
       const tags = parseTags(t.tags);
       const tagsHtml = tags.map(tag => `<span class="tag">${tag}</span>`).join("");
       return `
-        <tr class="status-${t.status}" data-id="${t.id}" data-project="${t.project}">
+        <tr class="status-${t.status}" data-id="${t.id}" data-project="${t.project}" data-completed-at="${t.completed_at || ''}">
           <td class="col-id">#${t.id}</td>
           <td class="col-title">${t.title}</td>
           <td>
@@ -1276,6 +1294,13 @@ document.getElementById("search-input")!.addEventListener("input", (e) => {
 document.getElementById("sort-select")!.addEventListener("change", (e) => {
   currentSort = (e.target as HTMLSelectElement).value;
   refreshCurrentView();
+});
+
+// Hide old done toggle
+document.getElementById("hide-done-btn")!.addEventListener("click", () => {
+  hideOldDone = !hideOldDone;
+  document.getElementById("hide-done-btn")!.classList.toggle("active", hideOldDone);
+  applySearchFilter();
 });
 
 // Close modal

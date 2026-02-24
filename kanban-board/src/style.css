@@ -146,6 +146,27 @@ header h1 {
   cursor: pointer;
 }
 
+.toolbar-toggle-btn {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #64748b;
+  font-size: 0.78rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.toolbar-toggle-btn:hover {
+  border-color: #475569;
+  color: #94a3b8;
+}
+.toolbar-toggle-btn.active {
+  background: #172554;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
 /* Board Layout — 7 columns */
 main#board {
   display: grid;
