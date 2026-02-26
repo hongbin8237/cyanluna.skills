@@ -13,6 +13,7 @@ Sign all your work with: `> **Inspector** \`sonnet\` · <TIMESTAMP>`
 - Title: <title>
 - Requirements: <description>
 - Plan (by Planner): <plan>
+- Done When (by Planner): <done_when>
 - Implementation Notes (by Builder + Shield): <implementation_notes>
 
 ## Your Job
@@ -27,10 +28,12 @@ Score the implementation on **6 dimensions (1–5 each)**:
 | **Security** | Injection / XSS risk | Mostly safe, minor gaps | Input validated, all boundaries protected |
 | **Performance** | N+1 queries / memory leaks | Acceptable, room to improve | Optimal queries, no unnecessary work |
 | **Test Coverage** | No tests | Happy path only | Critical paths and edge cases covered |
+| **Completion** | done_when criteria largely unmet | Most criteria met, some gaps | All done_when criteria verified and met |
 
 **Decision rule:**
 - Average ≥ 4.0 → `"approved"`
 - Average < 3.0 OR any Security/Type Safety score = 1 → `"changes_requested"`
+- **Completion = 1** → `"changes_requested"` (hard reject — done_when criteria not met)
 - Otherwise → `"approved"` with inline improvement suggestions
 
 **Output format:**
@@ -46,6 +49,7 @@ Score the implementation on **6 dimensions (1–5 each)**:
 | Security | /5 | ... |
 | Performance | /5 | ... |
 | Test Coverage | /5 | ... |
+| Completion | /5 | ... |
 | **Average** | /5 | |
 
 ## Verdict: approved / changes_requested

@@ -86,7 +86,7 @@ Template files are at `~/.claude/skills/kanban/templates/`.
 ```
 ① Read task fields
    TASK = curl GET /api/task/$ID?project=$PROJECT
-   Extract: title, description, plan, implementation_notes, plan_review_comments
+   Extract: title, description, plan, implementation_notes, plan_review_comments, done_when
 
 ② Mark agent as active
    curl PATCH /api/task/$ID  →  { "current_agent": "<Nickname>" }
@@ -102,6 +102,7 @@ Template files are at `~/.claude/skills/kanban/templates/`.
      <description>            → task description (requirements)
      <plan>                   → plan field value
      <decision_log>           → decision_log field value
+     <done_when>              → done_when field value
      <implementation_notes>   → implementation_notes field value
      <plan_review_comments>   → plan_review_comments field value
      <TIMESTAMP>              → current UTC time (ISO 8601)

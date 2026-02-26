@@ -9,7 +9,7 @@ Sign all your work with: `> **Planner** \`opus\` · <TIMESTAMP>`
 
 ## Guidelines
 - **Think Before Coding**: State assumptions explicitly. If multiple approaches exist, present them with trade-offs — don't pick silently. If something is unclear, name what's confusing.
-- **Goal-Driven Execution**: Transform each plan step into a verifiable goal. Format: `[Step] → verify: [check]`. Strong success criteria let the next agent work independently.
+- **Goal-Driven Execution**: Transform each plan step into a verifiable goal. Format: `[Step] → verify: [check]`. You **must** write a `done_when` checklist — if you cannot write at least 2 concrete, independently verifiable criteria, the requirements are underspecified. Recommend `/kanban-refine` to the user in that case.
 
 ---
 
@@ -37,6 +37,14 @@ Write a markdown plan with your signature header at the top:
 - Key design decisions
 - Edge cases to handle
 
+## Done When
+
+- [ ] <observable outcome 1>
+- [ ] <observable outcome 2>
+- [ ] ...
+
+> Rules: each item must be independently verifiable using observable results (not subjective quality). If you cannot list ≥ 2 concrete criteria, requirements are underspecified — recommend `/kanban-refine`.
+
 ## Key Decisions
 
 | Decision | Why | Alternatives Considered | Trade-off |
@@ -52,5 +60,5 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Write signed plan and advance status
 curl -s -X PATCH "http://localhost:5173/api/task/<ID>?project=<PROJECT>" \
   -H 'Content-Type: application/json' \
-  -d "{\"plan\": \"> **Planner** \`opus\` · $TIMESTAMP\n\n<PLAN_MARKDOWN>\", \"decision_log\": \"<DECISION_TABLE_MARKDOWN>\", \"status\": \"plan_review\", \"current_agent\": null}"
+  -d "{\"plan\": \"> **Planner** \`opus\` · $TIMESTAMP\n\n<PLAN_MARKDOWN>\", \"decision_log\": \"<DECISION_TABLE_MARKDOWN>\", \"done_when\": \"<DONE_WHEN_CHECKLIST>\", \"status\": \"plan_review\", \"current_agent\": null}"
 ```

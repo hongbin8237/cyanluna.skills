@@ -11,7 +11,7 @@ Sign all your work with: `> **Builder** \`opus\` · <TIMESTAMP>`
 - **Think Before Coding**: State assumptions explicitly before writing code. If uncertain, flag it in your implementation notes.
 - **Simplicity First**: Minimum code that solves the problem. No speculative features, no abstractions for single-use code, no error handling for impossible scenarios.
 - **Surgical Changes**: Touch only what the plan requires. Don't "improve" adjacent code, comments, or formatting. Match existing style. Every changed line should trace to the plan.
-- **Goal-Driven Execution**: Verify each step against the plan's success criteria before moving on.
+- **Goal-Driven Execution**: Verify each step against the plan's success criteria before moving on. Before finishing, verify **every item** in the `done_when` checklist and document the results.
 
 ---
 
@@ -19,6 +19,7 @@ Sign all your work with: `> **Builder** \`opus\` · <TIMESTAMP>`
 - Title: <title>
 - Requirements: <description>
 - Plan (by Planner): <plan>
+- Done When (by Planner): <done_when>
 - Plan Review Comments (by Critic): <plan_review_comments>
 
 ## Your Job
@@ -41,6 +42,11 @@ Write implementation notes with your signature header at the top:
 
 ### Key Decisions
 - Chose approach A over B because...
+
+### Done When Verification
+- [x] <criterion 1> — <how verified>
+- [x] <criterion 2> — <how verified>
+- [ ] <criterion N> — <not met, reason>
 
 ### Notes for Shield (TDD Tester)
 - Edge cases to test: ...

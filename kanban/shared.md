@@ -135,10 +135,10 @@ The `agent_log` accumulates the full chronological history of all agents who tou
 | Nickname | Reads | Writes (signed) | Moves to |
 |----------|-------|-----------------|----------|
 | `Refiner` | `title`, `description` | `description` (rewrite) | stays `todo` |
-| `Planner` | `description` | `plan`, `decision_log` | `plan_review` |
-| `Critic` | `description`, `plan`, `decision_log` | `plan_review_comments` | `impl` or `plan` |
-| `Builder` | `description`, `plan`, `plan_review_comments` | `implementation_notes` | (none) |
+| `Planner` | `description` | `plan`, `decision_log`, `done_when` | `plan_review` |
+| `Critic` | `description`, `plan`, `decision_log`, `done_when` | `plan_review_comments` | `impl` or `plan` |
+| `Builder` | `description`, `plan`, `done_when`, `plan_review_comments` | `implementation_notes` | (none) |
 | `Shield` | `description`, `implementation_notes` | `implementation_notes` (append) | `impl_review` |
-| `Inspector` | `description`, `plan`, `implementation_notes` | `review_comments` | `test` or `impl` |
+| `Inspector` | `description`, `plan`, `done_when`, `implementation_notes` | `review_comments` | `test` or `impl` |
 | `Ranger` | `implementation_notes` | `test_results` | `done` or `impl` |
 | All agents | — | append signed entry to `agent_log` | — |

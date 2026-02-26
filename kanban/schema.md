@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   attachments TEXT,
   notes TEXT,
   decision_log TEXT,
+  done_when TEXT,
   rank INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   started_at TEXT,
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 | `attachments` | TEXT | JSON array of attachment file names |
 | `notes` | TEXT | JSON array of note objects |
 | `decision_log` | TEXT | Key architecture decisions by Planner (markdown table) |
+| `done_when` | TEXT | Verifiable completion criteria written by Planner (markdown checklist) |
 | `rank` | INTEGER | Display order within column |
 
 ## Agent Nicknames
@@ -62,7 +64,7 @@ Each agent has a fixed nickname used in all log records, field headers, and `cur
 
 | Nickname | Role | Model | Writes to |
 |----------|------|-------|-----------|
-| `Planner` | Plan Agent | `opus` | `plan`, `decision_log` |
+| `Planner` | Plan Agent | `opus` | `plan`, `decision_log`, `done_when` |
 | `Critic` | Plan Review Agent | `sonnet` | `plan_review_comments` |
 | `Builder` | Worker Agent | `opus` | `implementation_notes` |
 | `Shield` | TDD Tester | `sonnet` | `implementation_notes` (append) |
@@ -160,3 +162,13 @@ subprocess.run(['curl','-s','-X','PATCH','http://localhost:5173/api/task/$ID?pro
 ```
 
 Replace `NICKNAME` with the agent's nickname (e.g. `Planner`, `Builder`), `MODEL` with `opus` or `sonnet`.
+
+## Schema Migrations
+
+When adding new columns, use `ALTER TABLE` with a try/catch pattern to handle existing DBs:
+
+```sql
+ALTER TABLE tasks ADD COLUMN <column_name> <TYPE>;
+```
+
+The `kanban-api.ts` plugin runs migrations automatically on startup. Each migration is wrapped in a try/catch so it's safe to run on DBs that already have the column.
