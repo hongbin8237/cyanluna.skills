@@ -44,8 +44,10 @@
 
 ```bash
 git clone https://github.com/cyanluna/cyanluna.skills.git
-cp -R cyanluna.skills/kanban      ~/.claude/skills/
-cp -R cyanluna.skills/kanban-init ~/.claude/skills/
+cp -R cyanluna.skills/kanban        ~/.claude/skills/
+cp -R cyanluna.skills/kanban-run    ~/.claude/skills/
+cp -R cyanluna.skills/kanban-refine ~/.claude/skills/
+cp -R cyanluna.skills/kanban-init   ~/.claude/skills/
 ```
 
 **2. Initialize a project** (inside any project directory)
@@ -64,7 +66,7 @@ This creates `.claude/kanban.json`, a per-project SQLite DB at `~/.claude/kanban
 
 ```
 /kanban add Implement user authentication
-/kanban run 1                  # runs the full AI pipeline
+/kanban-run 1                  # runs the full AI pipeline
 ```
 
 ---
@@ -145,47 +147,31 @@ Each agent has a fixed **nickname** used as a signature in every field and log e
 <details>
 <summary><strong>Click to expand all commands</strong></summary>
 
-### `/kanban` or `/kanban list`
+#### `/kanban` — Task CRUD & Board
 
-View the board as a markdown table. Fetches from the web API or falls back to direct SQLite.
+| Command | Description |
+|---------|-------------|
+| `/kanban` or `/kanban list` | View the board as a markdown table |
+| `/kanban context` | Session handoff — pipeline state summary |
+| `/kanban add <title>` | Create a new task (prompts for priority, level, description, tags) |
+| `/kanban move <ID> <status>` | Move a task to a different column (API enforces valid transitions) |
+| `/kanban edit <ID>` | Edit task fields interactively |
+| `/kanban remove <ID>` | Delete a task |
+| `/kanban stats` | Task counts per column and completion rate |
 
-### `/kanban context`
+#### `/kanban-run` — Pipeline Orchestration
 
-**Run first when starting a new session.** Fetches the board and outputs pipeline state:
-in-progress tasks, pending reviews, recently completed, and next todos.
+| Command | Description |
+|---------|-------------|
+| `/kanban-run <ID> [--auto]` | Run the full AI pipeline (default: pause at reviews, `--auto`: fully automatic) |
+| `/kanban-run step <ID>` | Execute only the next pipeline step, then exit |
+| `/kanban-run review <ID>` | Trigger code review for a task in `impl_review` status |
 
-### `/kanban add <title>`
+#### `/kanban-refine` — Requirements Refinement
 
-Create a new task. Prompts for priority, level (L1/L2/L3), description, and tags.
-
-### `/kanban run <ID> [--auto]`
-
-Run the full pipeline for a task. Default mode pauses for user confirmation at review stages.
-`--auto` mode runs fully automatically (circuit breaker still fires at 3+ review loops).
-
-### `/kanban step <ID>`
-
-Execute only the **next** pipeline step, then exit.
-
-### `/kanban move <ID> <status>`
-
-Manually move a task to a different column. The API enforces valid transitions.
-
-### `/kanban review <ID>`
-
-Trigger code review for a task in `impl_review` status.
-
-### `/kanban edit <ID>`
-
-Edit task fields interactively.
-
-### `/kanban remove <ID>`
-
-Delete a task.
-
-### `/kanban stats`
-
-Show task counts per column and overall completion rate.
+| Command | Description |
+|---------|-------------|
+| `/kanban-refine <ID>` | Refine backlog requirements through structured user interview |
 
 </details>
 
@@ -196,8 +182,9 @@ Show task counts per column and overall completion rate.
 ```
 ~/.claude/
 ├── skills/
-│   ├── kanban/              # Main skill (SKILL.md + schema + agent templates)
+│   ├── kanban/              # CRUD & board (SKILL.md + shared context + schema + templates)
 │   │   ├── SKILL.md
+│   │   ├── shared.md        # Shared context (DB, pipeline, API, error handling)
 │   │   ├── schema.md
 │   │   └── templates/       # Agent prompt templates
 │   │       ├── plan-agent.md
@@ -206,6 +193,10 @@ Show task counts per column and overall completion rate.
 │   │       ├── tdd-tester.md
 │   │       ├── code-review-agent.md
 │   │       └── test-runner.md
+│   ├── kanban-run/          # Pipeline orchestration
+│   │   └── SKILL.md
+│   ├── kanban-refine/       # Requirements refinement interview
+│   │   └── SKILL.md
 │   └── kanban-init/         # Project registration skill
 │       ├── SKILL.md
 │       └── onedrive-setup.md
