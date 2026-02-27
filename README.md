@@ -215,19 +215,24 @@ The `done_when` field connects agents into a verification loop:
 
 #### `/kanban-explore` — Codebase Exploration & Task Seeding
 
-Use when you have a vague idea but don't know how to implement it. Explores the codebase deeply, produces a direction report, then seeds the board with phased tasks. **Does not write code.**
+Use when you have a vague idea but don't know *how* to implement it. Explores the codebase deeply, produces a direction report, then seeds the board with phased tasks. **Does not write code.**
 
 | Command | Description |
 |---------|-------------|
-| `/kanban-explore <topic>` | Explore codebase, present 2–3 implementation directions, create phased kanban tasks |
+| `/kanban-explore <topic>` | Explore codebase, produce direction report, create phased kanban tasks |
+| `/kanban-explore` | No topic — immediately enters clarification interview |
 
 **Workflow:**
-1. Launches an Explore agent to deeply analyze the codebase
-2. Produces a structured report: current state → key findings → possible directions → recommendation
-3. You choose a direction via interactive prompt
-4. Creates 3–7 phased `todo` tasks, each embedding the exploration context
+1. Validates topic context (not word count — checks if why/where is missing)
+2. Launches an Explore agent with a structured A–D prompt (structure, relevant code, pain points, constraints)
+3. Produces a structured report: current state → key findings → 2–3 directions with pros/cons → recommendation
+4. You choose a direction (or "Cancel — save report only")
+5. Creates 3–7 phased `todo` tasks, each tagged with `phase:N` and linking back to the report
+6. Full exploration report is saved permanently as a `[Explore]` anchor task (`#REPORT_ID`)
 
-> Use `/kanban-refine` after exploring to add more detail to individual tasks before running the pipeline.
+**Cancel path**: if you choose Cancel, the report is still saved as an anchor task — no implementation tasks are created.
+
+> Use `/kanban-refine <ID>` after exploring to add more detail to individual tasks before running the pipeline.
 
 </details>
 
