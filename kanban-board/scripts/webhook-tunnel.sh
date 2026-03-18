@@ -12,20 +12,32 @@
 #   Bitbucket credentials from jarvis.gerald/.env
 #
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 JARVIS_DIR="$HOME/Dev/jarvis.gerald"
 REPOS_CONF="$SCRIPT_DIR/webhook-repos.conf"
 CLOUDFLARED="$HOME/.local/bin/cloudflared"
 LOCAL_PORT="${WEBHOOK_PORT:-5173}"
-PID_FILE="/tmp/cloudflared-webhook.pid"
-URL_FILE="/tmp/cloudflared-webhook.url"
-TUNNEL_LOG="/tmp/cloudflared-webhook.log"
 WEBHOOK_DESCRIPTION="Javis Auto Review"
+
+# Use a private runtime directory instead of world-writable /tmp
+RUN_DIR="${XDG_RUNTIME_DIR:-$HOME/.local/run}/cloudflared-webhook"
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+PID_FILE="$RUN_DIR/tunnel.pid"
+URL_FILE="$RUN_DIR/tunnel.url"
+TUNNEL_LOG="$RUN_DIR/tunnel.log"
 
 # ── Load Bitbucket credentials ──────────────────────────
 if [[ -f "$JARVIS_DIR/.env" ]]; then
   while IFS='=' read -r key value; do
     [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    # Only allow safe variable names (alphanumeric + underscore)
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "WARNING: Skipping invalid env key: $key" >&2
+      continue
+    fi
     value="${value%\"}"
     value="${value#\"}"
     export "$key=$value"
@@ -62,9 +74,12 @@ fi
 bb_api() {
   local method="$1" endpoint="$2"
   shift 2
-  curl -s -u "$BB_USER:$BB_TOKEN" -X "$method" \
+  # Pass credentials via stdin to avoid leaking in process list
+  curl -s -K - -X "$method" \
     -H "Content-Type: application/json" \
-    "${BB_API}${endpoint}" "$@"
+    "${BB_API}${endpoint}" "$@" <<CURL_CONFIG
+user = "${BB_USER}:${BB_TOKEN}"
+CURL_CONFIG
 }
 
 # ── Find or create webhook for a repo ──────────────────
@@ -85,10 +100,17 @@ try:
     for h in data.get('values', []):
         if h.get('description') == sys.argv[2]:
             print(h['uuid']); break
-except: pass
+except Exception as e:
+    print('', end='')
+    sys.exit(0)
 " "$existing" "$WEBHOOK_DESCRIPTION" 2>/dev/null) || true
 
-  local payload="{\"description\":\"$WEBHOOK_DESCRIPTION\",\"url\":\"$webhook_url\",\"active\":true,\"events\":[\"pullrequest:created\",\"pullrequest:updated\"]}"
+  # Build JSON payload safely with jq
+  local payload
+  payload=$(jq -n \
+    --arg desc "$WEBHOOK_DESCRIPTION" \
+    --arg url "$webhook_url" \
+    '{description: $desc, url: $url, active: true, events: ["pullrequest:created", "pullrequest:updated"]}')
 
   if [[ -n "$hook_uuid" ]]; then
     bb_api PUT "$hooks_endpoint/$hook_uuid" -d "$payload" > /dev/null 2>&1
@@ -106,7 +128,12 @@ except: pass
 if [[ "${1:-}" == "--kill" ]]; then
   if [[ -f "$PID_FILE" ]]; then
     pid=$(cat "$PID_FILE")
-    kill "$pid" 2>/dev/null && echo "Killed tunnel (PID $pid)" || echo "PID $pid not running"
+    # Validate PID is numeric before killing
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      kill "$pid" 2>/dev/null && echo "Killed tunnel (PID $pid)" || echo "PID $pid not running"
+    else
+      echo "ERROR: Invalid PID in $PID_FILE"
+    fi
     rm -f "$PID_FILE" "$URL_FILE"
   else
     echo "No tunnel running"
@@ -124,7 +151,9 @@ fi
 # ── Kill old tunnel ────────────────────────────────────
 if [[ -f "$PID_FILE" ]]; then
   old_pid=$(cat "$PID_FILE")
-  kill "$old_pid" 2>/dev/null && echo "Killed old tunnel (PID $old_pid)" || true
+  if [[ "$old_pid" =~ ^[0-9]+$ ]]; then
+    kill "$old_pid" 2>/dev/null && echo "Killed old tunnel (PID $old_pid)" || true
+  fi
   sleep 1
   rm -f "$PID_FILE" "$URL_FILE"
 fi
